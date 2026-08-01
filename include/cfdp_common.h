@@ -6,7 +6,7 @@
  * condition codes, etc.) shared by every CFDP module.
  * Implements the field encodings of CCSDS 727.0-B-5 (CCSDS File Delivery
  * Protocol), Section 5.
- * See also: docs/ccsds_cfdp.md
+ * See also: docs/727x0b5e1.pdf
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */
@@ -140,20 +140,20 @@ typedef enum
  */
 typedef enum
 {
-    CFDP_COND_NO_ERROR = 0x0,                    /**< No error. */
-    CFDP_COND_POSITIVE_ACK_LIMIT_REACHED = 0x1,  /**< Positive ACK limit reached. */
-    CFDP_COND_KEEP_ALIVE_LIMIT_REACHED = 0x2,    /**< Keep Alive limit reached. */
-    CFDP_COND_INVALID_TRANSMISSION_MODE = 0x3,   /**< Invalid transmission mode. */
-    CFDP_COND_FILESTORE_REJECTION = 0x4,         /**< Filestore rejection. */
-    CFDP_COND_FILE_CHECKSUM_FAILURE = 0x5,       /**< File checksum failure. */
-    CFDP_COND_FILE_SIZE_ERROR = 0x6,             /**< File size error. */
-    CFDP_COND_NAK_LIMIT_REACHED = 0x7,           /**< NAK limit reached. */
-    CFDP_COND_INACTIVITY_DETECTED = 0x8,         /**< Inactivity detected. */
-    CFDP_COND_INVALID_FILE_STRUCTURE = 0x9,      /**< Invalid file structure. */
-    CFDP_COND_CHECK_LIMIT_REACHED = 0xA,         /**< Check limit reached. */
-    CFDP_COND_UNSUPPORTED_CHECKSUM_TYPE = 0xB,   /**< Unsupported checksum type. */
-    CFDP_COND_SUSPEND_REQUEST_RECEIVED = 0xE,    /**< Suspend request received. */
-    CFDP_COND_CANCEL_REQUEST_RECEIVED = 0xF      /**< Cancel request received. */
+    CFDP_COND_NO_ERROR = 0x0,                   /**< No error. */
+    CFDP_COND_POSITIVE_ACK_LIMIT_REACHED = 0x1, /**< Positive ACK limit reached. */
+    CFDP_COND_KEEP_ALIVE_LIMIT_REACHED = 0x2,   /**< Keep Alive limit reached. */
+    CFDP_COND_INVALID_TRANSMISSION_MODE = 0x3,  /**< Invalid transmission mode. */
+    CFDP_COND_FILESTORE_REJECTION = 0x4,        /**< Filestore rejection. */
+    CFDP_COND_FILE_CHECKSUM_FAILURE = 0x5,      /**< File checksum failure. */
+    CFDP_COND_FILE_SIZE_ERROR = 0x6,            /**< File size error. */
+    CFDP_COND_NAK_LIMIT_REACHED = 0x7,          /**< NAK limit reached. */
+    CFDP_COND_INACTIVITY_DETECTED = 0x8,        /**< Inactivity detected. */
+    CFDP_COND_INVALID_FILE_STRUCTURE = 0x9,     /**< Invalid file structure. */
+    CFDP_COND_CHECK_LIMIT_REACHED = 0xA,        /**< Check limit reached. */
+    CFDP_COND_UNSUPPORTED_CHECKSUM_TYPE = 0xB,  /**< Unsupported checksum type. */
+    CFDP_COND_SUSPEND_REQUEST_RECEIVED = 0xE,   /**< Suspend request received. */
+    CFDP_COND_CANCEL_REQUEST_RECEIVED = 0xF     /**< Cancel request received. */
 } cfdp_condition_code_t;
 
 /**

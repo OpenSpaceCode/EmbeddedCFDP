@@ -28,6 +28,11 @@ int main(void)
     total_passed += r.passed;
     total_tests += r.total;
 
+    r = test_cfdp_tlv_run_all();
+    REPORT("cfdp_tlv", r);
+    total_passed += r.passed;
+    total_tests += r.total;
+
     r = test_cfdp_checksum_run_all();
     REPORT("cfdp_checksum", r);
     total_passed += r.passed;

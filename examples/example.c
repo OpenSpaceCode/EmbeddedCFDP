@@ -10,9 +10,9 @@
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */
 
-#include <stdio.h>
-
 #include "cfdp.h"
+
+#include <stdio.h>
 
 static const uint8_t g_file[] = "OpenSpaceCode CFDP demo payload";
 static const size_t g_file_len = sizeof(g_file) - 1U; /* drop the NUL terminator */
@@ -44,8 +44,12 @@ static void fill_common_header(cfdp_pdu_header_t *hdr, cfdp_pdu_type_t type)
     hdr->destination_entity_id = 2;
 }
 
-static size_t emit_pdu(const char *label, cfdp_pdu_header_t *hdr, const uint8_t *payload,
-                       size_t payload_len, uint8_t *out, size_t out_len)
+static size_t emit_pdu(const char *label,
+                       cfdp_pdu_header_t *hdr,
+                       const uint8_t *payload,
+                       size_t payload_len,
+                       uint8_t *out,
+                       size_t out_len)
 {
     size_t hlen = cfdp_pdu_header_size(hdr);
     hdr->data_field_length = (uint16_t)payload_len;
@@ -119,7 +123,9 @@ static void parse_and_verify(const uint8_t *pdu, size_t pdu_len)
 
     uint32_t checksum = cfdp_checksum_update(0, fd.offset, fd.file_data, fd.file_data_len);
     printf("\nReceiver reconstructed %zu octets at offset %llu, checksum 0x%08X\n",
-           fd.file_data_len, (unsigned long long)fd.offset, checksum);
+           fd.file_data_len,
+           (unsigned long long)fd.offset,
+           checksum);
     printf("Expected file checksum:                              0x%08X\n",
            cfdp_checksum_compute(g_file, g_file_len));
 }

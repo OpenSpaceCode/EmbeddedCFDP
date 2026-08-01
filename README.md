@@ -11,7 +11,7 @@ reusable, standards-aligned components for small-scale space applications.
 This library implements the *basic* protocol layer: serialisation and
 deserialisation of the fundamental PDUs. The transaction state machine, timers,
 retransmission and filestore are out of scope. See
-[`docs/ccsds_cfdp.md`](docs/ccsds_cfdp.md) for implementation notes.
+[`docs/727x0b5e1.pdf`](docs/727x0b5e1.pdf) for the standard itself.
 
 ## Features
 
@@ -20,14 +20,28 @@ retransmission and filestore are out of scope. See
 - **Fixed PDU header** (§5.1) — full flag set, variable-length entity IDs and
   transaction sequence numbers (1–8 octets), 32- and 64-bit (large file) modes.
 - **File Data PDU** (§5.3) — segment offset plus file data.
-- **File Directive PDUs** (§5.2, §5.4) — EOF, Finished, ACK, Metadata, NAK,
+- **File Directive PDUs** (§5.2) — EOF, Finished, ACK, Metadata, NAK,
   Prompt and Keep Alive.
+- **LV and TLV parameters** (§5.1.8, §5.1.9, §5.4) — filestore requests and
+  responses, messages to user, fault handler overrides, flow labels and
+  entity IDs.
+- **Fault Location** (§5.2.2, §5.2.3) — encoded and decoded directly by the EOF
+  and Finished codecs, which refuse to emit a fault condition without it.
 - **Modular file checksum** (§4.2.2) — streaming, segment-order independent.
+
+### Not Implemented
+
+- **CRC** (§4.1) — the header's CRC flag is encoded, but no CRC is computed or
+  checked.
+- **Segment metadata** in File Data PDUs (§5.3) — the header flag is encoded,
+  but the record continuation state and metadata field are not.
+- **Checksum types** other than modular (§4.2.2) — including the null checksum.
+- **Transaction procedures** (§4.3–§4.12) and **user operations** (§6).
 
 ### Design Principles
 
 - **No heap usage** — every buffer is caller-supplied.
-- **No external dependencies** — C11, standard library headers only.
+- **No external dependencies** — C99, standard library headers only.
 - **Round-trip symmetry** — every `_serialize` has a matching `_deserialize`.
 - **Big-endian on the wire**, native-endian in the API.
 
@@ -41,11 +55,13 @@ EmbeddedCFDP/
 │   ├── cfdp_endian.h       # Big-endian integer helpers
 │   ├── cfdp_checksum.h     # Modular file checksum
 │   ├── cfdp_pdu.h          # Fixed PDU header + File Data PDU
-│   └── cfdp_directive.h    # File Directive PDUs
+│   ├── cfdp_directive.h    # File Directive PDUs
+│   └── cfdp_tlv.h          # LV and TLV parameters
 ├── src/
 │   ├── cfdp_checksum.c
 │   ├── cfdp_pdu.c
-│   └── cfdp_directive.c
+│   ├── cfdp_directive.c
+│   └── cfdp_tlv.c
 ├── examples/
 │   └── example.c           # Build-and-parse a small-file transfer
 ├── tests/
@@ -54,9 +70,10 @@ EmbeddedCFDP/
 │   ├── test_cfdp_checksum.c
 │   ├── test_cfdp_pdu.c
 │   ├── test_cfdp_directive.c
+│   ├── test_cfdp_tlv.c
 │   └── unit_tests.c        # Test entry point
 ├── docs/
-│   └── ccsds_cfdp.md       # Implementation notes
+│   └── 727x0b5e1.pdf       # CCSDS 727.0-B-5 Blue Book
 ├── tools/
 │   └── coverage-html.sh    # Coverage report
 ├── build/                  # Build artifacts
@@ -198,6 +215,39 @@ size_t cfdp_file_data_deserialize(const uint8_t *buf, size_t buf_len, cfdp_large
 
 `cfdp_{eof,finished,ack,metadata,nak,prompt,keep_alive}_{serialize,deserialize}()`
 — each returns the number of octets written or consumed, or `0` on error.
+
+### LV/TLV parameters (`cfdp_tlv.h`)
+
+```c
+size_t cfdp_lv_serialize(const char *value, uint8_t value_len, uint8_t *buf, size_t buf_len);
+size_t cfdp_tlv_serialize(const cfdp_tlv_t *tlv, uint8_t *buf, size_t buf_len);
+size_t cfdp_entity_id_tlv_serialize(uint64_t entity_id, uint8_t id_len,
+                                    uint8_t *buf, size_t buf_len);
+size_t cfdp_fault_handler_tlv_serialize(cfdp_condition_code_t condition_code,
+                                        cfdp_fault_handler_code_t handler_code,
+                                        uint8_t *buf, size_t buf_len);
+size_t cfdp_filestore_request_tlv_serialize(const cfdp_filestore_request_t *req,
+                                            uint8_t *buf, size_t buf_len);
+size_t cfdp_filestore_response_tlv_serialize(const cfdp_filestore_response_t *resp,
+                                             uint8_t *buf, size_t buf_len);
+```
+
+Each has a matching `_deserialize()`. Metadata options and Finished filestore
+responses are carried as pre-encoded TLV chains: build one with these codecs,
+point the PDU struct at it, and walk a received chain by advancing through
+`cfdp_tlv_deserialize()` by its return value.
+
+```c
+/* Attach a filestore request to a Metadata PDU. */
+uint8_t options[64];
+cfdp_filestore_request_t req = {0};
+req.action_code = CFDP_FS_ACTION_CREATE_DIRECTORY;
+req.first_filename = "logs";
+req.first_filename_len = 4;
+
+md.options = options;
+md.options_len = (uint16_t)cfdp_filestore_request_tlv_serialize(&req, options, sizeof(options));
+```
 
 ### Checksum (`cfdp_checksum.h`)
 

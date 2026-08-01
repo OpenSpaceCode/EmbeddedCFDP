@@ -7,10 +7,10 @@
  * Implements CCSDS 727.0-B-5 (CCSDS File Delivery Protocol), Section 5.2 and
  * Section 5.4.
  *
- * @note Optional Type-Length-Value fields (fault location, filestore
- *       responses, filestore requests and message-to-user options) are not
- *       encoded or decoded by this basic implementation.
- * See also: docs/ccsds_cfdp.md
+ * @note Option TLVs are carried as pre-encoded spans: build or walk them with
+ *       the codecs in cfdp_tlv.h. The Fault Location TLV, being mandatory on a
+ *       fault condition, is encoded and decoded directly.
+ * See also: docs/727x0b5e1.pdf
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */
@@ -18,10 +18,11 @@
 #ifndef CFDP_DIRECTIVE_H
 #define CFDP_DIRECTIVE_H
 
+#include "cfdp_common.h"
+#include "cfdp_tlv.h"
+
 #include <stddef.h>
 #include <stdint.h>
-
-#include "cfdp_common.h"
 
 /* -------------------------------------------------------------------------
  * Constants
@@ -37,27 +38,37 @@
 /**
  * @brief End-of-File PDU contents (CCSDS 727.0-B-5 §5.2.2).
  *
- * @note The fault location TLV, present on a non-nominal condition code, is
- *       not encoded by this basic implementation.
+ * @note The Fault Location is omitted when @p condition_code is 'No error' and
+ *       required otherwise; serialisation fails if a fault condition is given
+ *       without one. On decode @p fault_location_len is 0 when absent.
  */
 typedef struct
 {
     cfdp_condition_code_t condition_code; /**< Condition at the sending entity. */
     uint32_t file_checksum;               /**< Modular checksum of the whole file. */
     uint64_t file_size;                   /**< Total file size in octets. */
+    uint64_t fault_location_entity_id;    /**< Entity that initiated cancellation. */
+    uint8_t fault_location_len;           /**< Octets of that entity ID; 0 when omitted. */
 } cfdp_eof_pdu_t;
 
 /**
  * @brief Finished PDU contents (CCSDS 727.0-B-5 §5.2.3).
  *
- * @note Filestore responses and the fault location TLV are not encoded by
- *       this basic implementation.
+ * @note @p filestore_responses is a pre-encoded chain of Filestore Response
+ *       TLVs in caller-owned memory — one per Filestore Request of the
+ *       Metadata PDU — built or walked with cfdp_filestore_response_tlv_*().
+ *       The Fault Location is required unless @p condition_code is 'No error'
+ *       or 'Unsupported checksum type'.
  */
 typedef struct
 {
     cfdp_condition_code_t condition_code; /**< Condition at the receiving entity. */
     cfdp_delivery_code_t delivery_code;   /**< Data complete or incomplete. */
     cfdp_file_status_t file_status;       /**< Fate of the delivered file. */
+    const uint8_t *filestore_responses;   /**< Filestore Response TLVs, or NULL. */
+    uint16_t filestore_responses_len;     /**< Octets in @p filestore_responses. */
+    uint64_t fault_location_entity_id;    /**< Entity that initiated cancellation. */
+    uint8_t fault_location_len;           /**< Octets of that entity ID; 0 when omitted. */
 } cfdp_finished_pdu_t;
 
 /**
@@ -74,19 +85,23 @@ typedef struct
 /**
  * @brief Metadata PDU contents (CCSDS 727.0-B-5 §5.2.5).
  *
- * @note @p source_filename and @p destination_filename point into
+ * @note @p source_filename, @p destination_filename and @p options point into
  *       caller-owned memory; the library neither copies nor frees them.
- *       Option TLVs are not encoded or decoded by this basic implementation.
+ *       @p options is a pre-encoded chain of option TLVs — filestore requests,
+ *       messages to user, fault handler overrides and flow labels — built or
+ *       walked with the codecs in cfdp_tlv.h.
  */
 typedef struct
 {
-    bool closure_requested;              /**< Whether transaction closure is requested. */
-    cfdp_checksum_type_t checksum_type;  /**< Checksum algorithm identifier. */
-    uint64_t file_size;                  /**< Total file size in octets. */
-    const char *source_filename;         /**< Source file name (may be NULL when empty). */
-    uint8_t source_filename_len;         /**< Source file name length in octets. */
-    const char *destination_filename;    /**< Destination file name (may be NULL when empty). */
-    uint8_t destination_filename_len;    /**< Destination file name length in octets. */
+    bool closure_requested;             /**< Whether transaction closure is requested. */
+    cfdp_checksum_type_t checksum_type; /**< Checksum algorithm identifier. */
+    uint64_t file_size;                 /**< Total file size in octets. */
+    const char *source_filename;        /**< Source file name (may be NULL when empty). */
+    uint8_t source_filename_len;        /**< Source file name length in octets. */
+    const char *destination_filename;   /**< Destination file name (may be NULL when empty). */
+    uint8_t destination_filename_len;   /**< Destination file name length in octets. */
+    const uint8_t *options;             /**< Option TLVs, or NULL when none. */
+    uint16_t options_len;               /**< Octets in @p options. */
 } cfdp_metadata_pdu_t;
 
 /**
@@ -106,10 +121,10 @@ typedef struct
  */
 typedef struct
 {
-    uint64_t start_of_scope;          /**< Start offset of the reported scope. */
-    uint64_t end_of_scope;            /**< End offset of the reported scope. */
+    uint64_t start_of_scope; /**< Start offset of the reported scope. */
+    uint64_t end_of_scope;   /**< End offset of the reported scope. */
     cfdp_segment_request_t segment_requests[CFDP_NAK_MAX_SEGMENT_REQUESTS]; /**< Missing ranges. */
-    size_t segment_request_count;     /**< Number of valid entries in @p segment_requests. */
+    size_t segment_request_count; /**< Number of valid entries in @p segment_requests. */
 } cfdp_nak_pdu_t;
 
 /* -------------------------------------------------------------------------
@@ -123,7 +138,8 @@ typedef struct
  * @param[in]  large_file_flag Selects a 32- or 64-bit file size field.
  * @param[out] buf             Output buffer.
  * @param[in]  buf_len         Buffer capacity in octets.
- * @return Bytes written, or 0 on error (NULL args or buffer too small).
+ * @return Bytes written, or 0 on error (NULL args, buffer too small, or a
+ *         fault condition code with no fault location).
  */
 size_t cfdp_eof_serialize(const cfdp_eof_pdu_t *eof,
                           cfdp_large_file_flag_t large_file_flag,
@@ -136,9 +152,10 @@ size_t cfdp_eof_serialize(const cfdp_eof_pdu_t *eof,
  * @param[in]  buf             Data field, positioned at the directive code.
  * @param[in]  buf_len         Length of the data field in octets.
  * @param[in]  large_file_flag Selects a 32- or 64-bit file size field.
- * @param[out] eof             Decoded EOF contents.
- * @return Bytes consumed, or 0 on error (NULL args, wrong directive code, or
- *         truncated input).
+ * @param[out] eof             Decoded EOF contents, including the Fault
+ *                             Location TLV when one is present.
+ * @return Bytes consumed, or 0 on error (NULL args, wrong directive code,
+ *         truncated input, or a malformed trailing TLV).
  */
 size_t cfdp_eof_deserialize(const uint8_t *buf,
                             size_t buf_len,
@@ -151,7 +168,8 @@ size_t cfdp_eof_deserialize(const uint8_t *buf,
  * @param[in]  fin     Finished contents to serialise.
  * @param[out] buf     Output buffer.
  * @param[in]  buf_len Buffer capacity in octets.
- * @return Bytes written, or 0 on error.
+ * @return Bytes written, or 0 on error (including a fault condition code with
+ *         no fault location).
  */
 size_t cfdp_finished_serialize(const cfdp_finished_pdu_t *fin, uint8_t *buf, size_t buf_len);
 
@@ -160,8 +178,10 @@ size_t cfdp_finished_serialize(const cfdp_finished_pdu_t *fin, uint8_t *buf, siz
  *
  * @param[in]  buf     Data field, positioned at the directive code.
  * @param[in]  buf_len Length of the data field in octets.
- * @param[out] fin     Decoded Finished contents.
- * @return Bytes consumed, or 0 on error.
+ * @param[out] fin     Decoded Finished contents; @p filestore_responses spans
+ *                     the Filestore Response TLVs within @p buf.
+ * @return Bytes consumed, or 0 on error (including a TLV other than a
+ *         Filestore Response or Fault Location).
  */
 size_t cfdp_finished_deserialize(const uint8_t *buf, size_t buf_len, cfdp_finished_pdu_t *fin);
 
@@ -205,7 +225,9 @@ size_t cfdp_metadata_serialize(const cfdp_metadata_pdu_t *md,
  * @param[in]  buf             Data field, positioned at the directive code.
  * @param[in]  buf_len         Length of the data field in octets.
  * @param[in]  large_file_flag Selects a 32- or 64-bit file size field.
- * @param[out] md              Decoded contents; file name pointers index into @p buf.
+ * @param[out] md              Decoded contents; file name and option pointers
+ *                             index into @p buf. Any octets after the
+ *                             destination file name become @p options.
  * @return Bytes consumed, or 0 on error.
  */
 size_t cfdp_metadata_deserialize(const uint8_t *buf,
@@ -259,7 +281,9 @@ size_t cfdp_prompt_serialize(cfdp_prompt_response_t response, uint8_t *buf, size
  * @param[out] response Decoded prompt response type.
  * @return Bytes consumed, or 0 on error.
  */
-size_t cfdp_prompt_deserialize(const uint8_t *buf, size_t buf_len, cfdp_prompt_response_t *response);
+size_t cfdp_prompt_deserialize(const uint8_t *buf,
+                               size_t buf_len,
+                               cfdp_prompt_response_t *response);
 
 /**
  * @brief Serialise a Keep Alive PDU data field.

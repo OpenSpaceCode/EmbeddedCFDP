@@ -4,15 +4,14 @@
  *
  * Exercises src/cfdp_checksum.c against CCSDS 727.0-B-5 §4.2.2 with
  * known-vector and streamed-accumulation checks.
- * See also: docs/ccsds_cfdp.md
+ * See also: docs/727x0b5e1.pdf
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */
 
+#include "cfdp.h"
 #include "cunit.h"
 #include "test_runners.h"
-
-#include "cfdp.h"
 
 static int test_checksum_known(void)
 {

@@ -3,7 +3,7 @@
  * @brief   CFDP 32-bit modular file checksum
  *
  * Implements the legacy modular checksum as per CCSDS 727.0-B-5 §4.2.2.
- * See also: docs/ccsds_cfdp.md
+ * See also: docs/727x0b5e1.pdf
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */

@@ -5,7 +5,7 @@
  * CFDP encodes every multi-octet field in big-endian order
  * (CCSDS 727.0-B-5 §5.1). These small inline helpers keep the module
  * serialisers free of hand-rolled shift/mask loops.
- * See also: docs/ccsds_cfdp.md
+ * See also: docs/727x0b5e1.pdf
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */

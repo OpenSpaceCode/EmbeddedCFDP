@@ -4,15 +4,14 @@
  *
  * Exercises src/cfdp_directive.c against CCSDS 727.0-B-5 Section 5.2 and
  * Section 5.4 with round-trip and known-vector checks.
- * See also: docs/ccsds_cfdp.md
+ * See also: docs/727x0b5e1.pdf
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */
 
+#include "cfdp.h"
 #include "cunit.h"
 #include "test_runners.h"
-
-#include "cfdp.h"
 
 static int test_eof_roundtrip(void)
 {
@@ -39,7 +38,9 @@ static int test_eof_roundtrip(void)
 static int test_finished_roundtrip(void)
 {
     cfdp_finished_pdu_t fin = {0};
-    fin.condition_code = CFDP_COND_FILE_CHECKSUM_FAILURE;
+    /* 'Unsupported checksum type' is the one fault condition that carries no
+     * Fault Location (§5.2.3). */
+    fin.condition_code = CFDP_COND_UNSUPPORTED_CHECKSUM_TYPE;
     fin.delivery_code = CFDP_DELIVERY_INCOMPLETE;
     fin.file_status = CFDP_FILE_STATUS_RETAINED;
 
@@ -49,9 +50,137 @@ static int test_finished_roundtrip(void)
 
     cfdp_finished_pdu_t out = {0};
     ASSERT_EQ_INT(2, cfdp_finished_deserialize(buf, n, &out));
-    ASSERT_EQ_INT(CFDP_COND_FILE_CHECKSUM_FAILURE, out.condition_code);
+    ASSERT_EQ_INT(CFDP_COND_UNSUPPORTED_CHECKSUM_TYPE, out.condition_code);
     ASSERT_EQ_INT(CFDP_DELIVERY_INCOMPLETE, out.delivery_code);
     ASSERT_EQ_INT(CFDP_FILE_STATUS_RETAINED, out.file_status);
+    ASSERT_TRUE(!out.filestore_responses);
+    ASSERT_EQ_INT(0, out.fault_location_len);
+
+    /* The nominal close of a successful transfer carries no TLVs at all. */
+    cfdp_finished_pdu_t nominal = {0};
+    nominal.condition_code = CFDP_COND_NO_ERROR;
+    nominal.delivery_code = CFDP_DELIVERY_COMPLETE;
+    nominal.file_status = CFDP_FILE_STATUS_RETAINED;
+    ASSERT_EQ_INT(2, cfdp_finished_serialize(&nominal, buf, sizeof(buf)));
+    ASSERT_EQ_INT(0x02, buf[1]);
+    return 0;
+}
+
+/**
+ * @brief Encode two Filestore Response TLVs for the Finished PDU tests.
+ */
+static size_t build_filestore_responses(uint8_t *buf, size_t buf_len)
+{
+    cfdp_filestore_response_t resp = {0};
+    resp.action_code = CFDP_FS_ACTION_DELETE_FILE;
+    resp.status_code = CFDP_FS_STATUS_SUCCESSFUL;
+    resp.first_filename = "a.dat";
+    resp.first_filename_len = 5;
+
+    size_t n = cfdp_filestore_response_tlv_serialize(&resp, buf, buf_len);
+
+    resp.action_code = CFDP_FS_ACTION_CREATE_DIRECTORY;
+    resp.status_code = CFDP_FS_STATUS_NOT_PERFORMED;
+    resp.first_filename = "dir";
+    resp.first_filename_len = 3;
+
+    return n + cfdp_filestore_response_tlv_serialize(&resp, &buf[n], buf_len - n);
+}
+
+static int test_finished_filestore_and_fault_location(void)
+{
+    uint8_t responses[64];
+    size_t responses_len = build_filestore_responses(responses, sizeof(responses));
+
+    cfdp_finished_pdu_t fin = {0};
+    fin.condition_code = CFDP_COND_FILESTORE_REJECTION;
+    fin.delivery_code = CFDP_DELIVERY_INCOMPLETE;
+    fin.file_status = CFDP_FILE_STATUS_DISCARDED_FILESTORE_REJECTION;
+    fin.filestore_responses = responses;
+    fin.filestore_responses_len = (uint16_t)responses_len;
+    fin.fault_location_entity_id = 9;
+    fin.fault_location_len = 1;
+
+    uint8_t buf[96];
+    size_t n = cfdp_finished_serialize(&fin, buf, sizeof(buf));
+    ASSERT_EQ_INT(2 + responses_len + 3, n);
+
+    cfdp_finished_pdu_t out = {0};
+    ASSERT_EQ_INT(n, cfdp_finished_deserialize(buf, n, &out));
+    ASSERT_EQ_INT(responses_len, out.filestore_responses_len);
+    ASSERT_EQ_MEM(responses, out.filestore_responses, responses_len);
+    ASSERT_TRUE(out.fault_location_entity_id == 9ULL);
+    ASSERT_EQ_INT(1, out.fault_location_len);
+
+    /* The reported span decodes back into the two responses it was built from. */
+    cfdp_filestore_response_t first = {0};
+    size_t consumed =
+        cfdp_filestore_response_tlv_deserialize(out.filestore_responses, responses_len, &first);
+    ASSERT_TRUE(consumed > 0);
+    ASSERT_EQ_INT(CFDP_FS_ACTION_DELETE_FILE, first.action_code);
+
+    cfdp_filestore_response_t second = {0};
+    ASSERT_TRUE(cfdp_filestore_response_tlv_deserialize(&out.filestore_responses[consumed],
+                                                        responses_len - consumed,
+                                                        &second) > 0);
+    ASSERT_EQ_INT(CFDP_FS_ACTION_CREATE_DIRECTORY, second.action_code);
+    return 0;
+}
+
+static int test_finished_serialize_invalid_args(void)
+{
+    uint8_t responses[64];
+    size_t responses_len = build_filestore_responses(responses, sizeof(responses));
+
+    cfdp_finished_pdu_t fin = {0};
+    fin.condition_code = CFDP_COND_FILESTORE_REJECTION;
+
+    /* A fault condition demands a Fault Location (§5.2.3). */
+    uint8_t buf[96];
+    ASSERT_EQ_INT(0, cfdp_finished_serialize(&fin, buf, sizeof(buf)));
+
+    fin.fault_location_entity_id = 9;
+    fin.fault_location_len = 1;
+    ASSERT_EQ_INT(5, cfdp_finished_serialize(&fin, buf, sizeof(buf)));
+
+    /* No room for the Fault Location TLV after the fixed octets. */
+    ASSERT_EQ_INT(0, cfdp_finished_serialize(&fin, buf, 3));
+
+    fin.filestore_responses_len = (uint16_t)responses_len;
+    ASSERT_EQ_INT(0, cfdp_finished_serialize(&fin, buf, sizeof(buf)));
+
+    fin.filestore_responses = responses;
+    ASSERT_EQ_INT(0, cfdp_finished_serialize(&fin, buf, responses_len));
+    return 0;
+}
+
+static int test_finished_deserialize_bad_tlvs(void)
+{
+    cfdp_finished_pdu_t out = {0};
+
+    /* Only Filestore Response and Entity ID TLVs may follow (§5.2.3). */
+    const uint8_t wrong_type[] = {CFDP_DIRECTIVE_FINISHED, 0x00, CFDP_TLV_MESSAGE_TO_USER, 0x00};
+    ASSERT_EQ_INT(0, cfdp_finished_deserialize(wrong_type, sizeof(wrong_type), &out));
+
+    /* A Filestore Response after the Fault Location breaks the field order. */
+    const uint8_t out_of_order[] = {CFDP_DIRECTIVE_FINISHED,
+                                    0x00,
+                                    CFDP_TLV_ENTITY_ID,
+                                    0x01,
+                                    0x07,
+                                    CFDP_TLV_FILESTORE_RESPONSE,
+                                    0x02,
+                                    0x10,
+                                    0x00};
+    ASSERT_EQ_INT(0, cfdp_finished_deserialize(out_of_order, sizeof(out_of_order), &out));
+
+    /* A TLV whose length runs past the end of the data field. */
+    const uint8_t truncated[] = {CFDP_DIRECTIVE_FINISHED, 0x00, CFDP_TLV_FILESTORE_RESPONSE, 0x04};
+    ASSERT_EQ_INT(0, cfdp_finished_deserialize(truncated, sizeof(truncated), &out));
+
+    /* An Entity ID TLV carrying an illegal identifier length. */
+    const uint8_t bad_entity[] = {CFDP_DIRECTIVE_FINISHED, 0x00, CFDP_TLV_ENTITY_ID, 0x00};
+    ASSERT_EQ_INT(0, cfdp_finished_deserialize(bad_entity, sizeof(bad_entity), &out));
     return 0;
 }
 
@@ -173,19 +302,83 @@ static int test_eof_deserialize_invalid_args(void)
 static int test_eof_large_file_roundtrip(void)
 {
     cfdp_eof_pdu_t eof = {0};
-    eof.condition_code = CFDP_COND_FILE_SIZE_ERROR;
+    eof.condition_code = CFDP_COND_NO_ERROR;
     eof.file_checksum = 0xAABBCCDDU;
     eof.file_size = 0x0000000100000000ULL;
 
-    uint8_t buf[16];
+    uint8_t buf[24];
     size_t n = cfdp_eof_serialize(&eof, CFDP_FILE_SIZE_LARGE, buf, sizeof(buf));
     ASSERT_EQ_INT(14, n);
 
     cfdp_eof_pdu_t out = {0};
     ASSERT_EQ_INT(n, cfdp_eof_deserialize(buf, n, CFDP_FILE_SIZE_LARGE, &out));
-    ASSERT_EQ_INT(CFDP_COND_FILE_SIZE_ERROR, out.condition_code);
     ASSERT_TRUE(out.file_checksum == 0xAABBCCDDU);
     ASSERT_TRUE(out.file_size == eof.file_size);
+    ASSERT_EQ_INT(0, out.fault_location_len);
+    return 0;
+}
+
+static int test_eof_fault_location_roundtrip(void)
+{
+    cfdp_eof_pdu_t eof = {0};
+    eof.condition_code = CFDP_COND_FILE_SIZE_ERROR;
+    eof.file_checksum = 0x01020304U;
+    eof.file_size = 16;
+    eof.fault_location_entity_id = 0xBEEF;
+    eof.fault_location_len = 2;
+
+    uint8_t buf[24];
+    size_t n = cfdp_eof_serialize(&eof, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf));
+
+    /* 10 fixed octets, then a 2-octet Entity ID TLV with its type and length. */
+    ASSERT_EQ_INT(14, n);
+    ASSERT_EQ_INT(CFDP_TLV_ENTITY_ID, buf[10]);
+    ASSERT_EQ_INT(2, buf[11]);
+    ASSERT_EQ_INT(0xBE, buf[12]);
+    ASSERT_EQ_INT(0xEF, buf[13]);
+
+    cfdp_eof_pdu_t out = {0};
+    ASSERT_EQ_INT(n, cfdp_eof_deserialize(buf, n, CFDP_FILE_SIZE_SMALL, &out));
+    ASSERT_EQ_INT(CFDP_COND_FILE_SIZE_ERROR, out.condition_code);
+    ASSERT_TRUE(out.fault_location_entity_id == 0xBEEFULL);
+    ASSERT_EQ_INT(2, out.fault_location_len);
+    return 0;
+}
+
+static int test_eof_fault_location_required(void)
+{
+    cfdp_eof_pdu_t eof = {0};
+    eof.condition_code = CFDP_COND_FILESTORE_REJECTION;
+    eof.file_size = 16;
+
+    /* §5.2.2 requires the Fault Location on any condition but 'No error'. */
+    uint8_t buf[24];
+    ASSERT_EQ_INT(0, cfdp_eof_serialize(&eof, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+
+    eof.fault_location_entity_id = 3;
+    eof.fault_location_len = 1;
+    ASSERT_EQ_INT(13, cfdp_eof_serialize(&eof, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+
+    /* The TLV must still fit once the fixed part has been written. */
+    ASSERT_EQ_INT(0, cfdp_eof_serialize(&eof, CFDP_FILE_SIZE_SMALL, buf, 11));
+    return 0;
+}
+
+static int test_eof_deserialize_bad_fault_location(void)
+{
+    cfdp_eof_pdu_t eof = {0};
+    eof.condition_code = CFDP_COND_NO_ERROR;
+    eof.file_size = 16;
+
+    uint8_t buf[24];
+    size_t n = cfdp_eof_serialize(&eof, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf));
+
+    /* Trailing octets that are not a well-formed Entity ID TLV. */
+    buf[n] = (uint8_t)CFDP_TLV_FLOW_LABEL;
+    buf[n + 1U] = 1;
+    buf[n + 2U] = 9;
+    cfdp_eof_pdu_t out = {0};
+    ASSERT_EQ_INT(0, cfdp_eof_deserialize(buf, n + 3U, CFDP_FILE_SIZE_SMALL, &out));
     return 0;
 }
 
@@ -248,6 +441,49 @@ static int test_metadata_empty_filenames(void)
     return 0;
 }
 
+static int test_metadata_with_options(void)
+{
+    /* A Filestore Request followed by a Message to User, the two option TLVs a
+     * Metadata PDU most commonly carries (§5.2.5). */
+    uint8_t options[64];
+    cfdp_filestore_request_t req = {0};
+    req.action_code = CFDP_FS_ACTION_CREATE_DIRECTORY;
+    req.first_filename = "logs";
+    req.first_filename_len = 4;
+    size_t options_len = cfdp_filestore_request_tlv_serialize(&req, options, sizeof(options));
+
+    cfdp_tlv_t message = {0};
+    message.type = (uint8_t)CFDP_TLV_MESSAGE_TO_USER;
+    message.length = 4;
+    message.value = (const uint8_t *)"cfdp";
+    options_len +=
+        cfdp_tlv_serialize(&message, &options[options_len], sizeof(options) - options_len);
+
+    cfdp_metadata_pdu_t md = {0};
+    md.file_size = 512;
+    md.source_filename = "s.dat";
+    md.source_filename_len = 5;
+    md.destination_filename = "d.dat";
+    md.destination_filename_len = 5;
+    md.options = options;
+    md.options_len = (uint16_t)options_len;
+
+    uint8_t buf[96];
+    size_t n = cfdp_metadata_serialize(&md, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf));
+    ASSERT_EQ_INT(4 + 5 + 5 + 4 + options_len, n);
+
+    cfdp_metadata_pdu_t out = {0};
+    ASSERT_EQ_INT(n, cfdp_metadata_deserialize(buf, n, CFDP_FILE_SIZE_SMALL, &out));
+    ASSERT_EQ_INT(options_len, out.options_len);
+    ASSERT_EQ_MEM(options, out.options, options_len);
+
+    cfdp_filestore_request_t decoded = {0};
+    ASSERT_TRUE(cfdp_filestore_request_tlv_deserialize(out.options, out.options_len, &decoded) > 0);
+    ASSERT_EQ_INT(CFDP_FS_ACTION_CREATE_DIRECTORY, decoded.action_code);
+    ASSERT_EQ_MEM("logs", decoded.first_filename, 4);
+    return 0;
+}
+
 static int test_metadata_serialize_invalid_args(void)
 {
     cfdp_metadata_pdu_t md = {0};
@@ -268,6 +504,15 @@ static int test_metadata_serialize_invalid_args(void)
     md.source_filename = "input.bin";
     md.destination_filename = NULL;
     ASSERT_EQ_INT(0, cfdp_metadata_serialize(&md, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+
+    /* Options declared but not supplied, then options that do not fit. */
+    static const uint8_t flow_label[] = {CFDP_TLV_FLOW_LABEL, 0x02, 'a', 'b'};
+    md.destination_filename = "output.bin";
+    md.options_len = (uint16_t)sizeof(flow_label);
+    ASSERT_EQ_INT(0, cfdp_metadata_serialize(&md, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+
+    md.options = flow_label;
+    ASSERT_EQ_INT(0, cfdp_metadata_serialize(&md, CFDP_FILE_SIZE_SMALL, buf, 30));
     return 0;
 }
 
@@ -293,20 +538,16 @@ static int test_metadata_deserialize_truncated_names(void)
     /* Directive code, flags and a 4-octet file size, then nothing: the source
      * name's length octet is missing. */
     const uint8_t no_source[] = {CFDP_DIRECTIVE_METADATA, 0x00, 0x00, 0x00, 0x00, 0x00};
-    ASSERT_EQ_INT(0,
-                  cfdp_metadata_deserialize(no_source,
-                                            sizeof(no_source),
-                                            CFDP_FILE_SIZE_SMALL,
-                                            &md));
+    ASSERT_EQ_INT(
+        0,
+        cfdp_metadata_deserialize(no_source, sizeof(no_source), CFDP_FILE_SIZE_SMALL, &md));
 
     /* The source name claims 5 octets but only 1 follows. */
     const uint8_t short_source[] =
         {CFDP_DIRECTIVE_METADATA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 'a'};
-    ASSERT_EQ_INT(0,
-                  cfdp_metadata_deserialize(short_source,
-                                            sizeof(short_source),
-                                            CFDP_FILE_SIZE_SMALL,
-                                            &md));
+    ASSERT_EQ_INT(
+        0,
+        cfdp_metadata_deserialize(short_source, sizeof(short_source), CFDP_FILE_SIZE_SMALL, &md));
 
     /* An empty source name consumes the last octet, leaving no destination. */
     const uint8_t no_destination[] = {CFDP_DIRECTIVE_METADATA, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -404,12 +645,14 @@ static int test_keep_alive_invalid_args(void)
     ASSERT_EQ_INT(0, cfdp_keep_alive_serialize(0, CFDP_FILE_SIZE_SMALL, NULL, sizeof(buf)));
     ASSERT_EQ_INT(0, cfdp_keep_alive_serialize(0, CFDP_FILE_SIZE_SMALL, buf, 4));
 
-    ASSERT_EQ_INT(0, cfdp_keep_alive_deserialize(NULL, sizeof(buf), CFDP_FILE_SIZE_SMALL, &progress));
+    ASSERT_EQ_INT(0,
+                  cfdp_keep_alive_deserialize(NULL, sizeof(buf), CFDP_FILE_SIZE_SMALL, &progress));
     ASSERT_EQ_INT(0, cfdp_keep_alive_deserialize(buf, sizeof(buf), CFDP_FILE_SIZE_SMALL, NULL));
     ASSERT_EQ_INT(0, cfdp_keep_alive_deserialize(buf, 4, CFDP_FILE_SIZE_SMALL, &progress));
 
     buf[0] = (uint8_t)CFDP_DIRECTIVE_EOF;
-    ASSERT_EQ_INT(0, cfdp_keep_alive_deserialize(buf, sizeof(buf), CFDP_FILE_SIZE_SMALL, &progress));
+    ASSERT_EQ_INT(0,
+                  cfdp_keep_alive_deserialize(buf, sizeof(buf), CFDP_FILE_SIZE_SMALL, &progress));
     return 0;
 }
 
@@ -417,14 +660,21 @@ test_result_t test_cfdp_directive_run_all(void)
 {
     RUN_TEST(test_eof_roundtrip);
     RUN_TEST(test_eof_large_file_roundtrip);
+    RUN_TEST(test_eof_fault_location_roundtrip);
+    RUN_TEST(test_eof_fault_location_required);
+    RUN_TEST(test_eof_deserialize_bad_fault_location);
     RUN_TEST(test_eof_serialize_invalid_args);
     RUN_TEST(test_eof_deserialize_invalid_args);
     RUN_TEST(test_finished_roundtrip);
+    RUN_TEST(test_finished_filestore_and_fault_location);
+    RUN_TEST(test_finished_serialize_invalid_args);
+    RUN_TEST(test_finished_deserialize_bad_tlvs);
     RUN_TEST(test_finished_invalid_args);
     RUN_TEST(test_ack_roundtrip);
     RUN_TEST(test_ack_invalid_args);
     RUN_TEST(test_metadata_roundtrip);
     RUN_TEST(test_metadata_empty_filenames);
+    RUN_TEST(test_metadata_with_options);
     RUN_TEST(test_metadata_serialize_invalid_args);
     RUN_TEST(test_metadata_deserialize_invalid_args);
     RUN_TEST(test_metadata_deserialize_truncated_names);

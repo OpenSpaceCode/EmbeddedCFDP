@@ -6,7 +6,7 @@
  * and the File Data PDU payload.
  * Implements CCSDS 727.0-B-5 (CCSDS File Delivery Protocol), Section 5.1
  * (fixed PDU header) and Section 5.3 (File Data PDU).
- * See also: docs/ccsds_cfdp.md
+ * See also: docs/727x0b5e1.pdf
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */
@@ -14,10 +14,10 @@
 #ifndef CFDP_PDU_H
 #define CFDP_PDU_H
 
+#include "cfdp_common.h"
+
 #include <stddef.h>
 #include <stdint.h>
-
-#include "cfdp_common.h"
 
 /* -------------------------------------------------------------------------
  * Types
@@ -31,20 +31,20 @@
  */
 typedef struct
 {
-    uint8_t version;                            /**< Protocol version (3-bit field). */
-    cfdp_pdu_type_t pdu_type;                   /**< Directive or File Data. */
-    cfdp_direction_t direction;                 /**< Toward receiver or sender. */
-    cfdp_transmission_mode_t transmission_mode; /**< Acknowledged or unacknowledged. */
-    cfdp_crc_flag_t crc_flag;                   /**< Whether a CRC trails the PDU. */
-    cfdp_large_file_flag_t large_file_flag;     /**< Selects 32- or 64-bit file fields. */
-    uint16_t data_field_length;                 /**< PDU data field length in octets. */
-    cfdp_seg_ctrl_t segmentation_control;       /**< Record boundary preservation. */
+    uint8_t version;                                /**< Protocol version (3-bit field). */
+    cfdp_pdu_type_t pdu_type;                       /**< Directive or File Data. */
+    cfdp_direction_t direction;                     /**< Toward receiver or sender. */
+    cfdp_transmission_mode_t transmission_mode;     /**< Acknowledged or unacknowledged. */
+    cfdp_crc_flag_t crc_flag;                       /**< Whether a CRC trails the PDU. */
+    cfdp_large_file_flag_t large_file_flag;         /**< Selects 32- or 64-bit file fields. */
+    uint16_t data_field_length;                     /**< PDU data field length in octets. */
+    cfdp_seg_ctrl_t segmentation_control;           /**< Record boundary preservation. */
     cfdp_seg_metadata_flag_t segment_metadata_flag; /**< Segment metadata present flag. */
-    uint8_t entity_id_length;              /**< Entity ID length in octets (1..8). */
-    uint8_t transaction_seq_length;        /**< Transaction sequence length in octets (1..8). */
-    uint64_t source_entity_id;             /**< Source entity ID. */
-    uint64_t transaction_seq_number;       /**< Transaction sequence number. */
-    uint64_t destination_entity_id;        /**< Destination entity ID. */
+    uint8_t entity_id_length;                       /**< Entity ID length in octets (1..8). */
+    uint8_t transaction_seq_length;  /**< Transaction sequence length in octets (1..8). */
+    uint64_t source_entity_id;       /**< Source entity ID. */
+    uint64_t transaction_seq_number; /**< Transaction sequence number. */
+    uint64_t destination_entity_id;  /**< Destination entity ID. */
 } cfdp_pdu_header_t;
 
 /**
@@ -56,9 +56,9 @@ typedef struct
  */
 typedef struct
 {
-    uint64_t offset;             /**< Offset of this segment within the file, in octets. */
-    const uint8_t *file_data;    /**< File data octets. */
-    size_t file_data_len;        /**< Number of file data octets. */
+    uint64_t offset;          /**< Offset of this segment within the file, in octets. */
+    const uint8_t *file_data; /**< File data octets. */
+    size_t file_data_len;     /**< Number of file data octets. */
 } cfdp_file_data_pdu_t;
 
 /* -------------------------------------------------------------------------

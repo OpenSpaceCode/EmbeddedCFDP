@@ -5,17 +5,16 @@
  * Exercises src/cfdp_pdu.c against CCSDS 727.0-B-5 Section 5.1 (fixed PDU
  * header) and Section 5.3 (File Data PDU) with round-trip and known-vector
  * checks.
- * See also: docs/ccsds_cfdp.md
+ * See also: docs/727x0b5e1.pdf
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */
 
+#include "cfdp.h"
 #include "cunit.h"
 #include "test_runners.h"
 
 #include <string.h>
-
-#include "cfdp.h"
 
 static void fill_header(cfdp_pdu_header_t *hdr)
 {

@@ -4,16 +4,16 @@
  *
  * Implements CCSDS 727.0-B-5 (CCSDS File Delivery Protocol), Section 5.1
  * (fixed PDU header) and Section 5.3 (File Data PDU).
- * See also: docs/ccsds_cfdp.md
+ * See also: docs/727x0b5e1.pdf
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */
 
 #include "cfdp_pdu.h"
 
-#include <string.h>
-
 #include "cfdp_endian.h"
+
+#include <string.h>
 
 /**
  * @brief Whether an identifier length is within the CFDP 1..8 octet range.

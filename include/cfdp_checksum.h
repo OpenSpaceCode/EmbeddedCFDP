@@ -7,7 +7,7 @@
  * formed by the file contents aligned to their absolute offset within the
  * file. Because each octet contributes independently of the others, the
  * checksum can be accumulated segment-by-segment and in any order.
- * See also: docs/ccsds_cfdp.md
+ * See also: docs/727x0b5e1.pdf
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */

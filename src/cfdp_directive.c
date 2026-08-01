@@ -4,71 +4,27 @@
  *
  * Implements CCSDS 727.0-B-5 (CCSDS File Delivery Protocol), Section 5.2 and
  * Section 5.4.
- * See also: docs/ccsds_cfdp.md
+ * See also: docs/727x0b5e1.pdf
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
  */
 
 #include "cfdp_directive.h"
 
-#include <string.h>
-
 #include "cfdp_endian.h"
 
-/**
- * @brief Write a Length-Value field (1-octet length prefix plus value).
- *
- * @param[out] buf       Output buffer.
- * @param[in]  buf_len   Buffer capacity in octets.
- * @param[in]  value     Value octets; may be NULL only when @p value_len is 0.
- * @param[in]  value_len Value length in octets.
- * @return Bytes written, or 0 on error.
- */
-static size_t cfdp_write_lv(uint8_t *buf, size_t buf_len, const char *value, uint8_t value_len)
-{
-    if ((value_len > 0) && (!value))
-    {
-        return 0;
-    }
-    /* Unreachable from cfdp_metadata_serialize, which sizes the buffer for both
-     * LV fields up front; kept as a bounds check for any future call site, and
-     * excluded from coverage because no input can reach it. */
-    if (buf_len < (size_t)value_len + 1U) /* GCOVR_EXCL_BR_LINE */
-    {
-        return 0; /* GCOVR_EXCL_LINE */
-    }
-    buf[0] = value_len;
-    if (value_len > 0)
-    {
-        memcpy(&buf[1], value, value_len);
-    }
-    return (size_t)value_len + 1U;
-}
+#include <string.h>
 
 /**
- * @brief Read a Length-Value field, pointing @p value into @p buf.
+ * @brief Whether a condition code obliges a PDU to carry a Fault Location.
  *
- * @param[in]  buf       Input buffer positioned at the length octet.
- * @param[in]  buf_len   Octets available in @p buf.
- * @param[out] value     Set to the value octets, or NULL when the value is empty.
- * @param[out] value_len Set to the value length in octets.
- * @return Bytes consumed, or 0 on error.
+ * @param[in] condition_code Condition code of the PDU being built.
+ * @return true when the Fault Location TLV must be present (§5.2.3).
  */
-static size_t cfdp_read_lv(const uint8_t *buf, size_t buf_len, const char **value,
-                           uint8_t *value_len)
+static bool cfdp_fault_location_required(cfdp_condition_code_t condition_code)
 {
-    if (buf_len < 1U)
-    {
-        return 0;
-    }
-    uint8_t len = buf[0];
-    if (buf_len < (size_t)len + 1U)
-    {
-        return 0;
-    }
-    *value = (len > 0) ? (const char *)&buf[1] : NULL;
-    *value_len = len;
-    return (size_t)len + 1U;
+    return (condition_code != CFDP_COND_NO_ERROR) &&
+           (condition_code != CFDP_COND_UNSUPPORTED_CHECKSUM_TYPE);
 }
 
 size_t cfdp_eof_serialize(const cfdp_eof_pdu_t *eof,
@@ -77,6 +33,14 @@ size_t cfdp_eof_serialize(const cfdp_eof_pdu_t *eof,
                           size_t buf_len)
 {
     if ((!eof) || (!buf))
+    {
+        return 0;
+    }
+
+    /* §5.2.2: the Fault Location is omitted only on 'No error'. Emitting a
+     * fault condition without it would produce a malformed EOF PDU. */
+    bool with_fault_location = (eof->condition_code != CFDP_COND_NO_ERROR);
+    if ((with_fault_location) && (eof->fault_location_len == 0))
     {
         return 0;
     }
@@ -93,7 +57,21 @@ size_t cfdp_eof_serialize(const cfdp_eof_pdu_t *eof,
     cfdp_write_uint(&buf[2], eof->file_checksum, 4);
     cfdp_write_uint(&buf[6], eof->file_size, fs);
 
-    return size;
+    if (!with_fault_location)
+    {
+        return size;
+    }
+
+    size_t n = cfdp_entity_id_tlv_serialize(eof->fault_location_entity_id,
+                                            eof->fault_location_len,
+                                            &buf[size],
+                                            buf_len - size);
+    if (n == 0)
+    {
+        return 0;
+    }
+
+    return size + n;
 }
 
 size_t cfdp_eof_deserialize(const uint8_t *buf,
@@ -116,23 +94,130 @@ size_t cfdp_eof_deserialize(const uint8_t *buf,
     eof->condition_code = (cfdp_condition_code_t)((buf[1] >> 4) & 0xFU);
     eof->file_checksum = (uint32_t)cfdp_read_uint(&buf[2], 4);
     eof->file_size = cfdp_read_uint(&buf[6], fs);
+    eof->fault_location_entity_id = 0;
+    eof->fault_location_len = 0;
 
-    return size;
+    if (buf_len == size)
+    {
+        return size;
+    }
+
+    size_t n = cfdp_entity_id_tlv_deserialize(&buf[size],
+                                              buf_len - size,
+                                              &eof->fault_location_entity_id,
+                                              &eof->fault_location_len);
+    if (n == 0)
+    {
+        return 0;
+    }
+
+    return size + n;
 }
 
 size_t cfdp_finished_serialize(const cfdp_finished_pdu_t *fin, uint8_t *buf, size_t buf_len)
 {
-    if ((!fin) || (!buf) || (buf_len < 2U))
+    if ((!fin) || (!buf) || (buf_len < 2U) ||
+        ((!fin->filestore_responses) && (fin->filestore_responses_len > 0)))
+    {
+        return 0;
+    }
+
+    /* §5.2.3: the Fault Location is omitted only on 'No error' and
+     * 'Unsupported checksum type'. */
+    bool with_fault_location = cfdp_fault_location_required(fin->condition_code);
+    if ((with_fault_location) && (fin->fault_location_len == 0))
+    {
+        return 0;
+    }
+
+    size_t pos = 2U;
+    if (buf_len < pos + fin->filestore_responses_len)
     {
         return 0;
     }
 
     buf[0] = (uint8_t)CFDP_DIRECTIVE_FINISHED;
-    buf[1] = (uint8_t)((((uint8_t)fin->condition_code & 0xFU) << 4) |
-                       (((uint8_t)fin->delivery_code & 0x1U) << 2) |
-                       ((uint8_t)fin->file_status & 0x3U));
+    buf[1] =
+        (uint8_t)((((uint8_t)fin->condition_code & 0xFU) << 4) |
+                  (((uint8_t)fin->delivery_code & 0x1U) << 2) | ((uint8_t)fin->file_status & 0x3U));
 
-    return 2;
+    if (fin->filestore_responses_len > 0)
+    {
+        memcpy(&buf[pos], fin->filestore_responses, fin->filestore_responses_len);
+        pos += fin->filestore_responses_len;
+    }
+
+    if (!with_fault_location)
+    {
+        return pos;
+    }
+
+    size_t n = cfdp_entity_id_tlv_serialize(fin->fault_location_entity_id,
+                                            fin->fault_location_len,
+                                            &buf[pos],
+                                            buf_len - pos);
+    if (n == 0)
+    {
+        return 0;
+    }
+
+    return pos + n;
+}
+
+/**
+ * @brief Decode the TLV chain trailing a Finished PDU's fixed octets.
+ *
+ * Filestore Responses are reported as the span they occupy in @p buf; an
+ * Entity ID TLV is decoded into the Fault Location fields. §5.2.3 admits no
+ * other TLV here, and the responses all precede the Fault Location.
+ *
+ * @param[in]  buf     Data field, positioned at the directive code.
+ * @param[in]  buf_len Length of the data field in octets.
+ * @param[out] fin     Finished contents receiving the decoded TLVs.
+ * @return Bytes consumed in total, or 0 on a malformed or unexpected TLV.
+ */
+static size_t cfdp_finished_parse_tlvs(const uint8_t *buf, size_t buf_len, cfdp_finished_pdu_t *fin)
+{
+    size_t pos = 2U;
+    size_t responses_start = pos;
+
+    while (pos < buf_len)
+    {
+        cfdp_tlv_t tlv;
+        size_t n = cfdp_tlv_deserialize(&buf[pos], buf_len - pos, &tlv);
+        if (n == 0)
+        {
+            return 0;
+        }
+
+        if (tlv.type == (uint8_t)CFDP_TLV_FILESTORE_RESPONSE)
+        {
+            if (fin->fault_location_len > 0)
+            {
+                return 0;
+            }
+            fin->filestore_responses = &buf[responses_start];
+            fin->filestore_responses_len = (uint16_t)((pos + n) - responses_start);
+        }
+        else if (tlv.type == (uint8_t)CFDP_TLV_ENTITY_ID)
+        {
+            if (cfdp_entity_id_tlv_deserialize(&buf[pos],
+                                               buf_len - pos,
+                                               &fin->fault_location_entity_id,
+                                               &fin->fault_location_len) == 0)
+            {
+                return 0;
+            }
+        }
+        else
+        {
+            return 0;
+        }
+
+        pos += n;
+    }
+
+    return pos;
 }
 
 size_t cfdp_finished_deserialize(const uint8_t *buf, size_t buf_len, cfdp_finished_pdu_t *fin)
@@ -145,8 +230,12 @@ size_t cfdp_finished_deserialize(const uint8_t *buf, size_t buf_len, cfdp_finish
     fin->condition_code = (cfdp_condition_code_t)((buf[1] >> 4) & 0xFU);
     fin->delivery_code = (cfdp_delivery_code_t)((buf[1] >> 2) & 0x1U);
     fin->file_status = (cfdp_file_status_t)(buf[1] & 0x3U);
+    fin->filestore_responses = NULL;
+    fin->filestore_responses_len = 0;
+    fin->fault_location_entity_id = 0;
+    fin->fault_location_len = 0;
 
-    return 2;
+    return cfdp_finished_parse_tlvs(buf, buf_len, fin);
 }
 
 size_t cfdp_ack_serialize(const cfdp_ack_pdu_t *ack, uint8_t *buf, size_t buf_len)
@@ -185,41 +274,51 @@ size_t cfdp_metadata_serialize(const cfdp_metadata_pdu_t *md,
                                uint8_t *buf,
                                size_t buf_len)
 {
-    if ((!md) || (!buf))
+    if ((!md) || (!buf) || ((!md->options) && (md->options_len > 0)))
     {
         return 0;
     }
 
     uint8_t fs = cfdp_file_size_octets(large_file_flag);
     size_t need = (size_t)fs + (size_t)md->source_filename_len +
-                  (size_t)md->destination_filename_len + 4U;
+                  (size_t)md->destination_filename_len + (size_t)md->options_len + 4U;
     if (buf_len < need)
     {
         return 0;
     }
 
     buf[0] = (uint8_t)CFDP_DIRECTIVE_METADATA;
-    buf[1] = (uint8_t)(((md->closure_requested ? 1U : 0U) << 6) |
-                       ((uint8_t)md->checksum_type & 0xFU));
+    buf[1] =
+        (uint8_t)(((md->closure_requested ? 1U : 0U) << 6) | ((uint8_t)md->checksum_type & 0xFU));
     size_t pos = 2;
     cfdp_write_uint(&buf[pos], md->file_size, fs);
     pos += fs;
 
-    size_t n = cfdp_write_lv(&buf[pos], buf_len - pos, md->source_filename,
-                             md->source_filename_len);
+    size_t n =
+        cfdp_lv_serialize(md->source_filename, md->source_filename_len, &buf[pos], buf_len - pos);
     if (n == 0)
     {
         return 0;
     }
     pos += n;
 
-    n = cfdp_write_lv(&buf[pos], buf_len - pos, md->destination_filename,
-                      md->destination_filename_len);
+    n = cfdp_lv_serialize(md->destination_filename,
+                          md->destination_filename_len,
+                          &buf[pos],
+                          buf_len - pos);
     if (n == 0)
     {
         return 0;
     }
-    return pos + n;
+    pos += n;
+
+    if (md->options_len > 0)
+    {
+        memcpy(&buf[pos], md->options, md->options_len);
+        pos += md->options_len;
+    }
+
+    return pos;
 }
 
 size_t cfdp_metadata_deserialize(const uint8_t *buf,
@@ -244,21 +343,31 @@ size_t cfdp_metadata_deserialize(const uint8_t *buf,
     md->file_size = cfdp_read_uint(&buf[pos], fs);
     pos += fs;
 
-    size_t n = cfdp_read_lv(&buf[pos], buf_len - pos, &md->source_filename,
-                            &md->source_filename_len);
+    size_t n = cfdp_lv_deserialize(&buf[pos],
+                                   buf_len - pos,
+                                   &md->source_filename,
+                                   &md->source_filename_len);
     if (n == 0)
     {
         return 0;
     }
     pos += n;
 
-    n = cfdp_read_lv(&buf[pos], buf_len - pos, &md->destination_filename,
-                     &md->destination_filename_len);
+    n = cfdp_lv_deserialize(&buf[pos],
+                            buf_len - pos,
+                            &md->destination_filename,
+                            &md->destination_filename_len);
     if (n == 0)
     {
         return 0;
     }
-    return pos + n;
+    pos += n;
+
+    /* Whatever follows the file names is the option TLV chain (§5.2.5). */
+    md->options = (buf_len > pos) ? &buf[pos] : NULL;
+    md->options_len = (uint16_t)(buf_len - pos);
+
+    return buf_len;
 }
 
 size_t cfdp_nak_serialize(const cfdp_nak_pdu_t *nak,
