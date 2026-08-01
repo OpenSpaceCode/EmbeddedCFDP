@@ -132,8 +132,11 @@ size_t cfdp_pdu_header_deserialize(const uint8_t *buf, size_t buf_len, cfdp_pdu_
 
     cfdp_unpack_flags(buf, hdr);
 
+    /* cfdp_unpack_flags always yields identifier lengths of 1..8 octets, so the
+     * size == 0 arm is unreachable here; it guards against future decoding
+     * changes, and keeps the line's branches out of the coverage report. */
     size_t size = cfdp_pdu_header_size(hdr);
-    if ((size == 0) || (buf_len < size))
+    if ((size == 0) || (buf_len < size)) /* GCOVR_EXCL_BR_LINE */
     {
         return 0;
     }

@@ -115,25 +115,136 @@ static int test_file_data_roundtrip(void)
     return 0;
 }
 
+static int test_file_data_empty_payload(void)
+{
+    cfdp_file_data_pdu_t fd = {0};
+    fd.offset = 0x0000BEEFULL;
+
+    uint8_t buf[8];
+    size_t n = cfdp_file_data_serialize(&fd, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf));
+    ASSERT_EQ_INT(4, n);
+
+    cfdp_file_data_pdu_t out = {0};
+    ASSERT_EQ_INT(4, cfdp_file_data_deserialize(buf, n, CFDP_FILE_SIZE_SMALL, &out));
+    ASSERT_TRUE(out.offset == fd.offset);
+    ASSERT_TRUE(!out.file_data);
+    ASSERT_EQ_INT(0, out.file_data_len);
+    return 0;
+}
+
+static int test_file_data_large_file_roundtrip(void)
+{
+    const uint8_t payload[] = {0x11, 0x22};
+    cfdp_file_data_pdu_t fd = {0};
+    fd.offset = 0x0102030405060708ULL;
+    fd.file_data = payload;
+    fd.file_data_len = sizeof(payload);
+
+    uint8_t buf[32];
+    size_t n = cfdp_file_data_serialize(&fd, CFDP_FILE_SIZE_LARGE, buf, sizeof(buf));
+    ASSERT_EQ_INT(8 + sizeof(payload), n);
+
+    cfdp_file_data_pdu_t out = {0};
+    ASSERT_EQ_INT(n, cfdp_file_data_deserialize(buf, n, CFDP_FILE_SIZE_LARGE, &out));
+    ASSERT_TRUE(out.offset == fd.offset);
+    ASSERT_EQ_MEM(payload, out.file_data, sizeof(payload));
+    return 0;
+}
+
 static int test_directive_code_peek(void)
 {
     const uint8_t buf[] = {CFDP_DIRECTIVE_METADATA, 0x00};
     cfdp_directive_code_t code;
     ASSERT_TRUE(cfdp_pdu_directive_code(buf, sizeof(buf), &code));
     ASSERT_EQ_INT(CFDP_DIRECTIVE_METADATA, code);
+
+    ASSERT_TRUE(!cfdp_pdu_directive_code(NULL, sizeof(buf), &code));
+    ASSERT_TRUE(!cfdp_pdu_directive_code(buf, sizeof(buf), NULL));
     ASSERT_TRUE(!cfdp_pdu_directive_code(buf, 0, &code));
     return 0;
 }
 
-static int test_header_invalid_args(void)
+static int test_header_size_invalid_lengths(void)
 {
     cfdp_pdu_header_t hdr;
     fill_header(&hdr);
-    uint8_t buf[4];
-    ASSERT_EQ_INT(0, cfdp_pdu_header_serialize(&hdr, buf, sizeof(buf)));
+    ASSERT_EQ_INT(7, cfdp_pdu_header_size(&hdr));
+    ASSERT_EQ_INT(0, cfdp_pdu_header_size(NULL));
+
+    /* Both identifier lengths are rejected below 1 and above 8 octets. */
+    fill_header(&hdr);
+    hdr.entity_id_length = 0;
+    ASSERT_EQ_INT(0, cfdp_pdu_header_size(&hdr));
+    hdr.entity_id_length = (uint8_t)(CFDP_ID_LEN_MAX + 1U);
+    ASSERT_EQ_INT(0, cfdp_pdu_header_size(&hdr));
+
+    fill_header(&hdr);
+    hdr.transaction_seq_length = 0;
+    ASSERT_EQ_INT(0, cfdp_pdu_header_size(&hdr));
+    hdr.transaction_seq_length = (uint8_t)(CFDP_ID_LEN_MAX + 1U);
+    ASSERT_EQ_INT(0, cfdp_pdu_header_size(&hdr));
+    return 0;
+}
+
+static int test_header_serialize_invalid_args(void)
+{
+    cfdp_pdu_header_t hdr;
+    fill_header(&hdr);
+    uint8_t buf[CFDP_PDU_HEADER_MAX_LEN];
 
     ASSERT_EQ_INT(0, cfdp_pdu_header_serialize(NULL, buf, sizeof(buf)));
+    ASSERT_EQ_INT(0, cfdp_pdu_header_serialize(&hdr, NULL, sizeof(buf)));
+    ASSERT_EQ_INT(0, cfdp_pdu_header_serialize(&hdr, buf, 4));
+
+    hdr.entity_id_length = 0;
+    ASSERT_EQ_INT(0, cfdp_pdu_header_serialize(&hdr, buf, sizeof(buf)));
+    return 0;
+}
+
+static int test_header_deserialize_invalid_args(void)
+{
+    cfdp_pdu_header_t hdr;
+    uint8_t buf[CFDP_PDU_HEADER_MAX_LEN] = {0};
+
+    ASSERT_EQ_INT(0, cfdp_pdu_header_deserialize(NULL, sizeof(buf), &hdr));
+    ASSERT_EQ_INT(0, cfdp_pdu_header_deserialize(buf, sizeof(buf), NULL));
     ASSERT_EQ_INT(0, cfdp_pdu_header_deserialize(buf, 2, &hdr));
+
+    /* Octet 3 asks for 8-octet identifiers, so the 4 octets supplied cannot
+     * hold the identifier fields the header announces. */
+    const uint8_t truncated[] = {0x20, 0x00, 0x0A, 0x77};
+    ASSERT_EQ_INT(0, cfdp_pdu_header_deserialize(truncated, sizeof(truncated), &hdr));
+    return 0;
+}
+
+static int test_file_data_serialize_invalid_args(void)
+{
+    const uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x42};
+    cfdp_file_data_pdu_t fd = {0};
+    fd.file_data = payload;
+    fd.file_data_len = sizeof(payload);
+
+    uint8_t buf[8];
+    ASSERT_EQ_INT(0, cfdp_file_data_serialize(NULL, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+    ASSERT_EQ_INT(0, cfdp_file_data_serialize(&fd, CFDP_FILE_SIZE_SMALL, NULL, sizeof(buf)));
+
+    /* 4 offset octets plus 5 payload octets do not fit in 8. */
+    ASSERT_EQ_INT(0, cfdp_file_data_serialize(&fd, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+
+    cfdp_file_data_pdu_t no_data = {0};
+    no_data.file_data_len = 3;
+    ASSERT_EQ_INT(0, cfdp_file_data_serialize(&no_data, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+    return 0;
+}
+
+static int test_file_data_deserialize_invalid_args(void)
+{
+    const uint8_t buf[8] = {0};
+    cfdp_file_data_pdu_t fd = {0};
+
+    ASSERT_EQ_INT(0, cfdp_file_data_deserialize(NULL, sizeof(buf), CFDP_FILE_SIZE_SMALL, &fd));
+    ASSERT_EQ_INT(0, cfdp_file_data_deserialize(buf, sizeof(buf), CFDP_FILE_SIZE_SMALL, NULL));
+    ASSERT_EQ_INT(0, cfdp_file_data_deserialize(buf, 3, CFDP_FILE_SIZE_SMALL, &fd));
     return 0;
 }
 
@@ -143,8 +254,14 @@ test_result_t test_cfdp_pdu_run_all(void)
     RUN_TEST(test_header_all_flags);
     RUN_TEST(test_header_roundtrip_large_ids);
     RUN_TEST(test_file_data_roundtrip);
+    RUN_TEST(test_file_data_empty_payload);
+    RUN_TEST(test_file_data_large_file_roundtrip);
     RUN_TEST(test_directive_code_peek);
-    RUN_TEST(test_header_invalid_args);
+    RUN_TEST(test_header_size_invalid_lengths);
+    RUN_TEST(test_header_serialize_invalid_args);
+    RUN_TEST(test_header_deserialize_invalid_args);
+    RUN_TEST(test_file_data_serialize_invalid_args);
+    RUN_TEST(test_file_data_deserialize_invalid_args);
 
     /* cunit.h keeps its tally in file-local statics, so these counters cover
      * only the tests run above. */

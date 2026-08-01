@@ -29,9 +29,33 @@ static int test_checksum_known(void)
     return 0;
 }
 
+static int test_checksum_no_data(void)
+{
+    const uint8_t data[] = {0xFF};
+
+    /* Both guard conditions must leave the running checksum untouched. */
+    ASSERT_TRUE(cfdp_checksum_update(0x11223344U, 0, NULL, 4) == 0x11223344U);
+    ASSERT_TRUE(cfdp_checksum_update(0x11223344U, 0, data, 0) == 0x11223344U);
+    ASSERT_TRUE(cfdp_checksum_compute(NULL, 8) == 0);
+    return 0;
+}
+
+static int test_checksum_offset_lanes(void)
+{
+    const uint8_t data[] = {0x01, 0x02};
+
+    /* An octet's lane follows its absolute file offset, not its index in the
+     * segment, so the same two octets weigh differently at offset 1 and 4. */
+    ASSERT_TRUE(cfdp_checksum_update(0, 1, data, sizeof(data)) == 0x00010200U);
+    ASSERT_TRUE(cfdp_checksum_update(0, 4, data, sizeof(data)) == 0x01020000U);
+    return 0;
+}
+
 test_result_t test_cfdp_checksum_run_all(void)
 {
     RUN_TEST(test_checksum_known);
+    RUN_TEST(test_checksum_no_data);
+    RUN_TEST(test_checksum_offset_lanes);
 
     /* cunit.h keeps its tally in file-local statics, so these counters cover
      * only the tests run above. */

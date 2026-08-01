@@ -30,9 +30,12 @@ static size_t cfdp_write_lv(uint8_t *buf, size_t buf_len, const char *value, uin
     {
         return 0;
     }
-    if (buf_len < (size_t)value_len + 1U)
+    /* Unreachable from cfdp_metadata_serialize, which sizes the buffer for both
+     * LV fields up front; kept as a bounds check for any future call site, and
+     * excluded from coverage because no input can reach it. */
+    if (buf_len < (size_t)value_len + 1U) /* GCOVR_EXCL_BR_LINE */
     {
-        return 0;
+        return 0; /* GCOVR_EXCL_LINE */
     }
     buf[0] = value_len;
     if (value_len > 0)
