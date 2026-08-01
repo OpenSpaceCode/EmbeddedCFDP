@@ -74,6 +74,14 @@ make
 
 Builds the static library, the example binary and the test binary in `build/`.
 
+The C standard, include paths and warning set are fixed in the `Makefile` and apply to the
+library, example and tests alike. Only the optimisation/instrumentation flags are meant to be
+overridden, via `OPT`:
+
+```bash
+make OPT="-O0 -g"
+```
+
 ### Build Library Only
 
 ```bash
@@ -101,8 +109,12 @@ Requires `gcovr`:
 ```bash
 pip install gcovr
 make coverage-html
+# Prints a line/branch summary
 # Output: build/coverage/index.html
 ```
+
+The script rebuilds with `OPT="-O0 -g --coverage"`, so instrumentation is the only difference
+from a normal build.
 
 ### Clean
 
