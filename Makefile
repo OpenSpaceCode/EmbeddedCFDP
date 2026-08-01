@@ -10,6 +10,10 @@ LIB = $(LIB_DIR)/libcfdp.a
 SRCS = $(wildcard src/*.c)
 OBJS = $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 
+# Test entry point plus one test file per source module.
+TEST_SRCS = $(wildcard tests/*.c)
+TEST_HDRS = $(wildcard tests/*.h)
+
 CTEST_PATH = $(BUILD_DIR)/tests/ctest
 EXAMPLE_PATH = $(BUILD_DIR)/examples/example
 
@@ -27,9 +31,9 @@ $(OBJ_DIR)/%.o: src/%.c
 
 ctest: $(CTEST_PATH)
 
-$(CTEST_PATH): tests/unit_tests.c $(LIB)
+$(CTEST_PATH): $(TEST_SRCS) $(TEST_HDRS) $(LIB)
 	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -Itests tests/unit_tests.c $(LIB) -o $@
+	$(CC) $(CFLAGS) -Itests $(TEST_SRCS) $(LIB) -o $@
 
 example: $(EXAMPLE_PATH)
 

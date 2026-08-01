@@ -50,7 +50,11 @@ EmbeddedCFDP/
 │   └── example.c           # Build-and-parse a small-file transfer
 ├── tests/
 │   ├── cunit.h             # Minimal test framework
-│   └── unit_tests.c        # Unit tests
+│   ├── test_runners.h      # Per-module test runner declarations
+│   ├── test_cfdp_checksum.c
+│   ├── test_cfdp_pdu.c
+│   ├── test_cfdp_directive.c
+│   └── unit_tests.c        # Test entry point
 ├── docs/
 │   └── ccsds_cfdp.md       # Implementation notes
 ├── tools/
