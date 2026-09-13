@@ -213,10 +213,13 @@ size_t cfdp_finished_deserialize(const uint8_t *buf, size_t buf_len, cfdp_finish
  * The directive subtype code is derived from @p ack->ack_directive_code per
  * table 5-8; it cannot be supplied, so a mismatched pair cannot be emitted.
  *
- * @param[in]  ack     ACK contents to serialise.
+ * @param[in]  ack     ACK contents to serialise; @p ack->ack_directive_code
+ *                     must be ::CFDP_DIRECTIVE_EOF or ::CFDP_DIRECTIVE_FINISHED,
+ *                     the only directives table 5-8 acknowledges.
  * @param[out] buf     Output buffer.
  * @param[in]  buf_len Buffer capacity in octets.
- * @return Bytes written, or 0 on error.
+ * @return Bytes written, or 0 on error (NULL args, buffer too small, or an
+ *         acknowledged directive other than EOF or Finished).
  */
 size_t cfdp_ack_serialize(const cfdp_ack_pdu_t *ack, uint8_t *buf, size_t buf_len);
 
@@ -225,10 +228,11 @@ size_t cfdp_ack_serialize(const cfdp_ack_pdu_t *ack, uint8_t *buf, size_t buf_le
  *
  * @param[in]  buf     Data field, positioned at the directive code.
  * @param[in]  buf_len Length of the data field in octets.
- * @param[out] ack     Decoded ACK contents.
+ * @param[out] ack     Decoded ACK contents; left untouched on error.
  * @return Bytes consumed, or 0 on error (NULL args, wrong directive code,
- *         truncated input, or a directive subtype code that table 5-8 does not
- *         allow for the acknowledged directive).
+ *         truncated input, an acknowledged directive other than EOF or
+ *         Finished, or a directive subtype code that table 5-8 does not allow
+ *         for the acknowledged directive).
  */
 size_t cfdp_ack_deserialize(const uint8_t *buf, size_t buf_len, cfdp_ack_pdu_t *ack);
 

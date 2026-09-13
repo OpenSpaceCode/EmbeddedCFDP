@@ -239,6 +239,18 @@ size_t cfdp_finished_deserialize(const uint8_t *buf, size_t buf_len, cfdp_finish
 }
 
 /**
+ * @brief Whether a directive may be acknowledged (table 5-8).
+ *
+ * @param[in] ack_directive_code Directive the ACK acknowledges.
+ * @return true for EOF and Finished, the only acknowledged directives.
+ */
+static bool cfdp_ack_directive_valid(cfdp_directive_code_t ack_directive_code)
+{
+    return (ack_directive_code == CFDP_DIRECTIVE_EOF) ||
+           (ack_directive_code == CFDP_DIRECTIVE_FINISHED);
+}
+
+/**
  * @brief Directive subtype code table 5-8 requires for an acknowledged PDU.
  *
  * @param[in] ack_directive_code Directive the ACK acknowledges.
@@ -253,7 +265,7 @@ static uint8_t cfdp_ack_directive_subtype(cfdp_directive_code_t ack_directive_co
 
 size_t cfdp_ack_serialize(const cfdp_ack_pdu_t *ack, uint8_t *buf, size_t buf_len)
 {
-    if ((!ack) || (!buf) || (buf_len < 3U))
+    if ((!ack) || (!buf) || (buf_len < 3U) || (!cfdp_ack_directive_valid(ack->ack_directive_code)))
     {
         return 0;
     }
@@ -274,15 +286,17 @@ size_t cfdp_ack_deserialize(const uint8_t *buf, size_t buf_len, cfdp_ack_pdu_t *
         return 0;
     }
 
-    ack->ack_directive_code = (cfdp_directive_code_t)((buf[1] >> 4) & 0xFU);
+    cfdp_directive_code_t acknowledged = (cfdp_directive_code_t)((buf[1] >> 4) & 0xFU);
 
-    /* Table 5-8 fixes the subtype for each acknowledged directive, so a value
-     * other than the required one makes the ACK unparseable by its peer. */
-    if ((buf[1] & 0xFU) != cfdp_ack_directive_subtype(ack->ack_directive_code))
+    /* Table 5-8 admits only EOF and Finished as acknowledged directives, and
+     * fixes the subtype for each, so anything else is not a valid ACK. */
+    if ((!cfdp_ack_directive_valid(acknowledged)) ||
+        ((buf[1] & 0xFU) != cfdp_ack_directive_subtype(acknowledged)))
     {
         return 0;
     }
 
+    ack->ack_directive_code = acknowledged;
     ack->condition_code = (cfdp_condition_code_t)((buf[2] >> 4) & 0xFU);
     ack->transaction_status = (cfdp_transaction_status_t)(buf[2] & 0x3U);
 

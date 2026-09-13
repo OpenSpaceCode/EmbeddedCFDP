@@ -272,6 +272,46 @@ static int test_ack_deserialize_rejects_wrong_subtype(void)
     return 0;
 }
 
+static int test_ack_rejects_unacknowledged_directives(void)
+{
+    /* Table 5-8: only EOF and Finished PDUs are acknowledged. Every other
+     * 4-bit directive code - defined or reserved - is rejected on encode. */
+    cfdp_ack_pdu_t ack = {0};
+    uint8_t buf[8];
+    for (uint8_t code = 0x0; code <= 0xF; code++)
+    {
+        ack.ack_directive_code = (cfdp_directive_code_t)code;
+        size_t expected =
+            ((code == CFDP_DIRECTIVE_EOF) || (code == CFDP_DIRECTIVE_FINISHED)) ? 3U : 0U;
+        ASSERT_EQ_INT(expected, cfdp_ack_serialize(&ack, buf, sizeof(buf)));
+    }
+    return 0;
+}
+
+static int test_ack_deserialize_rejects_unacknowledged_directives(void)
+{
+    cfdp_ack_pdu_t out = {0};
+    out.ack_directive_code = CFDP_DIRECTIVE_FINISHED;
+    out.condition_code = CFDP_COND_FILE_SIZE_ERROR;
+    out.transaction_status = CFDP_TXN_STATUS_TERMINATED;
+
+    /* ACK of Metadata, with the subtype '0000' table 5-8 would give it. */
+    const uint8_t metadata[] = {0x06, 0x70, 0x01};
+    ASSERT_EQ_INT(0, cfdp_ack_deserialize(metadata, sizeof(metadata), &out));
+
+    /* ACK of NAK, and of the reserved directive code '0000'. */
+    const uint8_t nak[] = {0x06, 0x80, 0x01};
+    ASSERT_EQ_INT(0, cfdp_ack_deserialize(nak, sizeof(nak), &out));
+    const uint8_t reserved[] = {0x06, 0x00, 0x01};
+    ASSERT_EQ_INT(0, cfdp_ack_deserialize(reserved, sizeof(reserved), &out));
+
+    /* A rejected ACK leaves the output as it was. */
+    ASSERT_EQ_INT(CFDP_DIRECTIVE_FINISHED, out.ack_directive_code);
+    ASSERT_EQ_INT(CFDP_COND_FILE_SIZE_ERROR, out.condition_code);
+    ASSERT_EQ_INT(CFDP_TXN_STATUS_TERMINATED, out.transaction_status);
+    return 0;
+}
+
 static int test_metadata_roundtrip(void)
 {
     cfdp_metadata_pdu_t md = {0};
@@ -471,9 +511,12 @@ static int test_finished_invalid_args(void)
 
 static int test_ack_invalid_args(void)
 {
+    /* A well-formed ACK of EOF, so only the argument under test is at fault. */
     cfdp_ack_pdu_t ack = {0};
+    ack.ack_directive_code = CFDP_DIRECTIVE_EOF;
     uint8_t buf[3] = {0};
     buf[0] = (uint8_t)CFDP_DIRECTIVE_ACK;
+    buf[1] = 0x40;
 
     ASSERT_EQ_INT(0, cfdp_ack_serialize(NULL, buf, sizeof(buf)));
     ASSERT_EQ_INT(0, cfdp_ack_serialize(&ack, NULL, sizeof(buf)));
@@ -792,6 +835,8 @@ test_result_t test_cfdp_directive_run_all(void)
     RUN_TEST(test_ack_exact_bytes);
     RUN_TEST(test_ack_subtype_is_derived);
     RUN_TEST(test_ack_deserialize_rejects_wrong_subtype);
+    RUN_TEST(test_ack_rejects_unacknowledged_directives);
+    RUN_TEST(test_ack_deserialize_rejects_unacknowledged_directives);
     RUN_TEST(test_ack_invalid_args);
     RUN_TEST(test_metadata_roundtrip);
     RUN_TEST(test_metadata_empty_filenames);
