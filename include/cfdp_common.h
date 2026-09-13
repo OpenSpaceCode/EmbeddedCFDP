@@ -217,7 +217,9 @@ typedef enum
 /**
  * @brief Checksum algorithm identifier (CCSDS 727.0-B-5 §5.2.5; SANA registry).
  *
- * Enum values equal the 4-bit checksum type field in the Metadata PDU.
+ * Enum values equal the 4-bit checksum type field in the Metadata PDU. Only the
+ * two mandatory types are named; types 1-14 may appear on the wire but are not
+ * implemented (see cfdp_checksum_type_supported()).
  */
 typedef enum
 {

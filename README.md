@@ -31,7 +31,9 @@ retransmission and filestore are out of scope. See
   entity IDs.
 - **Fault Location** (§5.2.2, §5.2.3) — encoded and decoded directly by the EOF
   and Finished codecs, which refuse to emit a fault condition without it.
-- **Modular file checksum** (§4.2.2) — streaming, segment-order independent.
+- **File checksums** (§4.2) — the mandatory modular (type 0) and null (type 15)
+  algorithms, streaming and segment-order independent, selectable by the
+  checksum type carried in the Metadata PDU.
 - **CRC length accounting** (§4.1.3.2) — `cfdp_pdu_payload_size()` returns the
   payload length with any trailing CRC excluded, so the CRC octets are never
   decoded as file data or as part of a TLV chain.
@@ -41,7 +43,9 @@ retransmission and filestore are out of scope. See
 - **CRC computation and checking** (§4.1) — the header's CRC flag is encoded
   and the trailer's length is accounted for, but no CRC value is computed or
   verified; supply and check it in the caller.
-- **Checksum types** other than modular (§4.2.2) — including the null checksum.
+- **Optional checksum types** 1–14 (§4.2.2.5) — reported as unsupported by
+  `cfdp_checksum_type_supported()`, so the caller can apply the §4.2.2.8
+  fallback.
 - **Transaction procedures** (§4.3–§4.12) and **user operations** (§6).
 
 ### Design Principles
@@ -59,7 +63,7 @@ EmbeddedCFDP/
 │   ├── cfdp.h              # Umbrella header
 │   ├── cfdp_common.h       # Enums, constants, shared helpers
 │   ├── cfdp_endian.h       # Big-endian integer helpers
-│   ├── cfdp_checksum.h     # Modular file checksum
+│   ├── cfdp_checksum.h     # Modular and null file checksums
 │   ├── cfdp_pdu.h          # Fixed PDU header + File Data PDU
 │   ├── cfdp_directive.h    # File Directive PDUs
 │   └── cfdp_tlv.h          # LV and TLV parameters
@@ -287,7 +291,17 @@ md.options_len = (uint16_t)cfdp_filestore_request_tlv_serialize(&req, options, s
 ```c
 uint32_t cfdp_checksum_update(uint32_t checksum, uint64_t offset, const uint8_t *data, size_t len);
 uint32_t cfdp_checksum_compute(const uint8_t *data, size_t len);
+bool cfdp_checksum_type_supported(cfdp_checksum_type_t type);
+bool cfdp_checksum_update_by_type(cfdp_checksum_type_t type, uint32_t *checksum,
+                                  uint64_t offset, const uint8_t *data, size_t len);
 ```
+
+`cfdp_checksum_update/compute` implement the modular checksum directly.
+`cfdp_checksum_update_by_type` applies whichever algorithm a Metadata PDU
+names: the modular or the null checksum, or `false` for a type this library does
+not implement. §4.2.2.8 then calls for an Unsupported Checksum Type fault, with
+the sender falling back to the modular checksum and the receiver to the null
+checksum; that choice depends on the entity's role and is left to the caller.
 
 ### Return-value convention
 
