@@ -28,6 +28,10 @@
  *
  * @note @p entity_id_length and @p transaction_seq_length hold the actual
  *       octet counts (1..8), not the (count-1) form used on the wire.
+ * @note @p segmentation_control and @p segment_metadata_flag apply to File Data
+ *       PDUs only. For a File Directive PDU they are written as '0' whatever
+ *       their value here, and decoded as '0' whatever the wire carries
+ *       (table 5-1: "Always '0' (and ignored) for File Directive PDUs").
  */
 typedef struct
 {

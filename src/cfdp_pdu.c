@@ -64,9 +64,12 @@ static uint8_t cfdp_pack_octet0(const cfdp_pdu_header_t *hdr)
  */
 static uint8_t cfdp_pack_octet3(const cfdp_pdu_header_t *hdr)
 {
-    return (uint8_t)((((uint8_t)hdr->segmentation_control & 0x1U) << 7) |
+    /* Table 5-1: both segment flags are always '0' for File Directive PDUs. */
+    uint8_t segment_flags_mask = (hdr->pdu_type == CFDP_PDU_TYPE_FILE_DATA) ? 0x1U : 0x0U;
+
+    return (uint8_t)((((uint8_t)hdr->segmentation_control & segment_flags_mask) << 7) |
                      (((hdr->entity_id_length - 1U) & 0x7U) << 4) |
-                     (((uint8_t)hdr->segment_metadata_flag & 0x1U) << 3) |
+                     (((uint8_t)hdr->segment_metadata_flag & segment_flags_mask) << 3) |
                      ((hdr->transaction_seq_length - 1U) & 0x7U));
 }
 
@@ -117,9 +120,13 @@ static void cfdp_unpack_flags(const uint8_t *buf, cfdp_pdu_header_t *hdr)
 
     hdr->data_field_length = (uint16_t)cfdp_read_uint(&buf[1], 2);
 
-    hdr->segmentation_control = (cfdp_seg_ctrl_t)((o3 >> 7) & 0x1U);
+    /* Table 5-1: both segment flags are ignored for File Directive PDUs, so a
+     * peer that sets them still decodes, with the flags reported as '0'. */
+    uint8_t segment_flags_mask = (hdr->pdu_type == CFDP_PDU_TYPE_FILE_DATA) ? 0x1U : 0x0U;
+
+    hdr->segmentation_control = (cfdp_seg_ctrl_t)((o3 >> 7) & segment_flags_mask);
     hdr->entity_id_length = (uint8_t)(((o3 >> 4) & 0x7U) + 1U);
-    hdr->segment_metadata_flag = (cfdp_seg_metadata_flag_t)((o3 >> 3) & 0x1U);
+    hdr->segment_metadata_flag = (cfdp_seg_metadata_flag_t)((o3 >> 3) & segment_flags_mask);
     hdr->transaction_seq_length = (uint8_t)((o3 & 0x7U) + 1U);
 }
 

@@ -234,6 +234,53 @@ static int test_header_deserialize_invalid_args(void)
     return 0;
 }
 
+static int test_header_directive_segment_flags_forced_zero(void)
+{
+    cfdp_pdu_header_t hdr;
+    fill_header(&hdr);
+    hdr.entity_id_length = 2;
+    hdr.transaction_seq_length = 3;
+    hdr.segmentation_control = CFDP_SEG_CTRL_BOUNDARIES_PRESERVED;
+    hdr.segment_metadata_flag = CFDP_SEG_METADATA_PRESENT;
+
+    uint8_t buf[CFDP_PDU_HEADER_MAX_LEN];
+
+    /* Table 5-1: always '0' for File Directive PDUs. Octet 3 keeps only the
+     * ID length fields: '001' (2 octets) and '010' (3 octets). */
+    ASSERT_TRUE(cfdp_pdu_header_serialize(&hdr, buf, sizeof(buf)) > 0);
+    ASSERT_EQ_INT(0x12, buf[3]);
+
+    /* File Data PDUs carry both flags: bits 7 and 3 are set as well. */
+    hdr.pdu_type = CFDP_PDU_TYPE_FILE_DATA;
+    ASSERT_TRUE(cfdp_pdu_header_serialize(&hdr, buf, sizeof(buf)) > 0);
+    ASSERT_EQ_INT(0x9A, buf[3]);
+    return 0;
+}
+
+static int test_header_directive_segment_flags_ignored_on_decode(void)
+{
+    cfdp_pdu_header_t hdr;
+
+    /* A File Directive PDU header from a peer that set both segment flags. */
+    const uint8_t directive[] = {0x20, 0x00, 0x0A, 0x88, 0x01, 0x02, 0x03};
+    ASSERT_EQ_INT(sizeof(directive),
+                  cfdp_pdu_header_deserialize(directive, sizeof(directive), &hdr));
+    ASSERT_EQ_INT(CFDP_PDU_TYPE_DIRECTIVE, hdr.pdu_type);
+    ASSERT_EQ_INT(CFDP_SEG_CTRL_BOUNDARIES_NOT_PRESERVED, hdr.segmentation_control);
+    ASSERT_EQ_INT(CFDP_SEG_METADATA_ABSENT, hdr.segment_metadata_flag);
+    ASSERT_EQ_INT(1, hdr.entity_id_length);
+    ASSERT_EQ_INT(1, hdr.transaction_seq_length);
+
+    /* The same octet 3 on a File Data PDU is meaningful and decoded as sent. */
+    const uint8_t file_data[] = {0x30, 0x00, 0x0A, 0x88, 0x01, 0x02, 0x03};
+    ASSERT_EQ_INT(sizeof(file_data),
+                  cfdp_pdu_header_deserialize(file_data, sizeof(file_data), &hdr));
+    ASSERT_EQ_INT(CFDP_PDU_TYPE_FILE_DATA, hdr.pdu_type);
+    ASSERT_EQ_INT(CFDP_SEG_CTRL_BOUNDARIES_PRESERVED, hdr.segmentation_control);
+    ASSERT_EQ_INT(CFDP_SEG_METADATA_PRESENT, hdr.segment_metadata_flag);
+    return 0;
+}
+
 static int test_header_serialize_rejects_other_versions(void)
 {
     cfdp_pdu_header_t hdr;
@@ -553,6 +600,8 @@ test_result_t test_cfdp_pdu_run_all(void)
     RUN_TEST(test_header_deserialize_invalid_args);
     RUN_TEST(test_header_serialize_rejects_other_versions);
     RUN_TEST(test_header_deserialize_rejects_other_versions);
+    RUN_TEST(test_header_directive_segment_flags_forced_zero);
+    RUN_TEST(test_header_directive_segment_flags_ignored_on_decode);
     RUN_TEST(test_file_data_serialize_invalid_args);
     RUN_TEST(test_file_data_deserialize_invalid_args);
     RUN_TEST(test_file_data_segment_metadata_exact_bytes);
