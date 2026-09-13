@@ -36,6 +36,12 @@
 /** @brief Largest possible PDU header: fixed part plus three 8-octet identifier fields. */
 #define CFDP_PDU_HEADER_MAX_LEN (CFDP_PDU_HEADER_FIXED_LEN + 3U * CFDP_ID_LEN_MAX)
 
+/** @brief Octets the 16-bit CRC occupies at the end of the PDU data field (§4.1.3.2). */
+#define CFDP_PDU_CRC_LEN 2U
+
+/** @brief Largest segment metadata field a File Data PDU can carry (§5.3, table 5-14). */
+#define CFDP_SEGMENT_METADATA_MAX_LEN 63U
+
 /* -------------------------------------------------------------------------
  * Types
  * ---------------------------------------------------------------------- */
@@ -116,6 +122,21 @@ typedef enum
     CFDP_SEG_METADATA_ABSENT = 0, /**< File Data PDUs carry no segment metadata. */
     CFDP_SEG_METADATA_PRESENT = 1 /**< File Data PDUs carry segment metadata. */
 } cfdp_seg_metadata_flag_t;
+
+/**
+ * @brief Record continuation state of a File Data segment (CCSDS 727.0-B-5 §5.3).
+ *
+ * Present only when the PDU header's Segment Metadata flag is
+ * ::CFDP_SEG_METADATA_PRESENT. Enum values equal the 2-bit wire pattern
+ * directly.
+ */
+typedef enum
+{
+    CFDP_RECORD_CONT_NEITHER = 0,      /**< Neither the start nor the end of any record. */
+    CFDP_RECORD_CONT_START = 1,        /**< Starts a record that continues past this PDU. */
+    CFDP_RECORD_CONT_END = 2,          /**< Ends a record that began in a prior PDU. */
+    CFDP_RECORD_CONT_START_AND_END = 3 /**< Carries one or more complete records. */
+} cfdp_record_continuation_t;
 
 /**
  * @brief File Directive codes (CCSDS 727.0-B-5 §5.4, Table 5-4).

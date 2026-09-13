@@ -102,11 +102,16 @@ static int test_file_data_roundtrip(void)
     fd.file_data_len = sizeof(payload);
 
     uint8_t buf[32];
-    size_t n = cfdp_file_data_serialize(&fd, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf));
+    size_t n = cfdp_file_data_serialize(&fd,
+                                        CFDP_FILE_SIZE_SMALL,
+                                        CFDP_SEG_METADATA_ABSENT,
+                                        buf,
+                                        sizeof(buf));
     ASSERT_EQ_INT(4 + sizeof(payload), n);
 
     cfdp_file_data_pdu_t out = {0};
-    size_t m = cfdp_file_data_deserialize(buf, n, CFDP_FILE_SIZE_SMALL, &out);
+    size_t m =
+        cfdp_file_data_deserialize(buf, n, CFDP_FILE_SIZE_SMALL, CFDP_SEG_METADATA_ABSENT, &out);
     ASSERT_EQ_INT(n, m);
     ASSERT_TRUE(out.offset == fd.offset);
     ASSERT_EQ_INT(sizeof(payload), out.file_data_len);
@@ -120,11 +125,17 @@ static int test_file_data_empty_payload(void)
     fd.offset = 0x0000BEEFULL;
 
     uint8_t buf[8];
-    size_t n = cfdp_file_data_serialize(&fd, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf));
+    size_t n = cfdp_file_data_serialize(&fd,
+                                        CFDP_FILE_SIZE_SMALL,
+                                        CFDP_SEG_METADATA_ABSENT,
+                                        buf,
+                                        sizeof(buf));
     ASSERT_EQ_INT(4, n);
 
     cfdp_file_data_pdu_t out = {0};
-    ASSERT_EQ_INT(4, cfdp_file_data_deserialize(buf, n, CFDP_FILE_SIZE_SMALL, &out));
+    ASSERT_EQ_INT(
+        4,
+        cfdp_file_data_deserialize(buf, n, CFDP_FILE_SIZE_SMALL, CFDP_SEG_METADATA_ABSENT, &out));
     ASSERT_TRUE(out.offset == fd.offset);
     ASSERT_TRUE(!out.file_data);
     ASSERT_EQ_INT(0, out.file_data_len);
@@ -140,11 +151,17 @@ static int test_file_data_large_file_roundtrip(void)
     fd.file_data_len = sizeof(payload);
 
     uint8_t buf[32];
-    size_t n = cfdp_file_data_serialize(&fd, CFDP_FILE_SIZE_LARGE, buf, sizeof(buf));
+    size_t n = cfdp_file_data_serialize(&fd,
+                                        CFDP_FILE_SIZE_LARGE,
+                                        CFDP_SEG_METADATA_ABSENT,
+                                        buf,
+                                        sizeof(buf));
     ASSERT_EQ_INT(8 + sizeof(payload), n);
 
     cfdp_file_data_pdu_t out = {0};
-    ASSERT_EQ_INT(n, cfdp_file_data_deserialize(buf, n, CFDP_FILE_SIZE_LARGE, &out));
+    ASSERT_EQ_INT(
+        n,
+        cfdp_file_data_deserialize(buf, n, CFDP_FILE_SIZE_LARGE, CFDP_SEG_METADATA_ABSENT, &out));
     ASSERT_TRUE(out.offset == fd.offset);
     ASSERT_EQ_MEM(payload, out.file_data, sizeof(payload));
     return 0;
@@ -224,15 +241,35 @@ static int test_file_data_serialize_invalid_args(void)
     fd.file_data_len = sizeof(payload);
 
     uint8_t buf[8];
-    ASSERT_EQ_INT(0, cfdp_file_data_serialize(NULL, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
-    ASSERT_EQ_INT(0, cfdp_file_data_serialize(&fd, CFDP_FILE_SIZE_SMALL, NULL, sizeof(buf)));
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_serialize(NULL,
+                                           CFDP_FILE_SIZE_SMALL,
+                                           CFDP_SEG_METADATA_ABSENT,
+                                           buf,
+                                           sizeof(buf)));
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_serialize(&fd,
+                                           CFDP_FILE_SIZE_SMALL,
+                                           CFDP_SEG_METADATA_ABSENT,
+                                           NULL,
+                                           sizeof(buf)));
 
     /* 4 offset octets plus 5 payload octets do not fit in 8. */
-    ASSERT_EQ_INT(0, cfdp_file_data_serialize(&fd, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_serialize(&fd,
+                                           CFDP_FILE_SIZE_SMALL,
+                                           CFDP_SEG_METADATA_ABSENT,
+                                           buf,
+                                           sizeof(buf)));
 
     cfdp_file_data_pdu_t no_data = {0};
     no_data.file_data_len = 3;
-    ASSERT_EQ_INT(0, cfdp_file_data_serialize(&no_data, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_serialize(&no_data,
+                                           CFDP_FILE_SIZE_SMALL,
+                                           CFDP_SEG_METADATA_ABSENT,
+                                           buf,
+                                           sizeof(buf)));
     return 0;
 }
 
@@ -241,9 +278,227 @@ static int test_file_data_deserialize_invalid_args(void)
     const uint8_t buf[8] = {0};
     cfdp_file_data_pdu_t fd = {0};
 
-    ASSERT_EQ_INT(0, cfdp_file_data_deserialize(NULL, sizeof(buf), CFDP_FILE_SIZE_SMALL, &fd));
-    ASSERT_EQ_INT(0, cfdp_file_data_deserialize(buf, sizeof(buf), CFDP_FILE_SIZE_SMALL, NULL));
-    ASSERT_EQ_INT(0, cfdp_file_data_deserialize(buf, 3, CFDP_FILE_SIZE_SMALL, &fd));
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_deserialize(NULL,
+                                             sizeof(buf),
+                                             CFDP_FILE_SIZE_SMALL,
+                                             CFDP_SEG_METADATA_ABSENT,
+                                             &fd));
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_deserialize(buf,
+                                             sizeof(buf),
+                                             CFDP_FILE_SIZE_SMALL,
+                                             CFDP_SEG_METADATA_ABSENT,
+                                             NULL));
+    ASSERT_EQ_INT(
+        0,
+        cfdp_file_data_deserialize(buf, 3, CFDP_FILE_SIZE_SMALL, CFDP_SEG_METADATA_ABSENT, &fd));
+    return 0;
+}
+
+static int test_file_data_segment_metadata_exact_bytes(void)
+{
+    const uint8_t metadata[] = {0xAA, 0xBB, 0xCC};
+    const uint8_t payload[] = {'H', 'I'};
+
+    cfdp_file_data_pdu_t fd = {0};
+    fd.offset = 16;
+    fd.file_data = payload;
+    fd.file_data_len = sizeof(payload);
+    fd.record_continuation = CFDP_RECORD_CONT_END;
+    fd.segment_metadata = metadata;
+    fd.segment_metadata_len = sizeof(metadata);
+
+    uint8_t buf[32];
+    size_t n = cfdp_file_data_serialize(&fd,
+                                        CFDP_FILE_SIZE_SMALL,
+                                        CFDP_SEG_METADATA_PRESENT,
+                                        buf,
+                                        sizeof(buf));
+
+    /* Table 5-14: record continuation state (2 bits) and segment metadata
+     * length (6 bits) share the first octet, then the metadata, then the
+     * offset, then the file data. 0x83 is state '10' with length 3. */
+    const uint8_t expected[] = {0x83, 0xAA, 0xBB, 0xCC, 0x00, 0x00, 0x00, 0x10, 'H', 'I'};
+    ASSERT_EQ_INT(sizeof(expected), n);
+    ASSERT_EQ_MEM(expected, buf, sizeof(expected));
+    return 0;
+}
+
+static int test_file_data_segment_metadata_roundtrip(void)
+{
+    const uint8_t metadata[] = {0x01, 0x02};
+    const uint8_t payload[] = {'a', 'b', 'c'};
+
+    cfdp_file_data_pdu_t fd = {0};
+    fd.offset = 0x1122334455667788ULL;
+    fd.file_data = payload;
+    fd.file_data_len = sizeof(payload);
+    fd.record_continuation = CFDP_RECORD_CONT_START_AND_END;
+    fd.segment_metadata = metadata;
+    fd.segment_metadata_len = sizeof(metadata);
+
+    uint8_t buf[64];
+    size_t n = cfdp_file_data_serialize(&fd,
+                                        CFDP_FILE_SIZE_LARGE,
+                                        CFDP_SEG_METADATA_PRESENT,
+                                        buf,
+                                        sizeof(buf));
+    ASSERT_TRUE(n > 0);
+
+    cfdp_file_data_pdu_t out;
+    ASSERT_EQ_INT(
+        n,
+        cfdp_file_data_deserialize(buf, n, CFDP_FILE_SIZE_LARGE, CFDP_SEG_METADATA_PRESENT, &out));
+    ASSERT_TRUE(out.offset == fd.offset);
+    ASSERT_EQ_INT(CFDP_RECORD_CONT_START_AND_END, out.record_continuation);
+    ASSERT_EQ_INT(sizeof(metadata), out.segment_metadata_len);
+    ASSERT_EQ_MEM(metadata, out.segment_metadata, sizeof(metadata));
+    ASSERT_EQ_INT(sizeof(payload), out.file_data_len);
+    ASSERT_EQ_MEM(payload, out.file_data, sizeof(payload));
+    return 0;
+}
+
+static int test_file_data_segment_metadata_absent_fields_cleared(void)
+{
+    const uint8_t wire[] = {0x00, 0x00, 0x00, 0x04, 'x'};
+
+    cfdp_file_data_pdu_t out;
+    memset(&out, 0xFF, sizeof(out));
+    ASSERT_EQ_INT(sizeof(wire),
+                  cfdp_file_data_deserialize(wire,
+                                             sizeof(wire),
+                                             CFDP_FILE_SIZE_SMALL,
+                                             CFDP_SEG_METADATA_ABSENT,
+                                             &out));
+    ASSERT_EQ_INT(CFDP_RECORD_CONT_NEITHER, out.record_continuation);
+    ASSERT_EQ_INT(0, out.segment_metadata_len);
+    ASSERT_TRUE(!out.segment_metadata);
+    ASSERT_TRUE(out.offset == 4);
+    return 0;
+}
+
+static int test_file_data_segment_metadata_mismatched_flag(void)
+{
+    const uint8_t metadata[] = {0xAA};
+    const uint8_t payload[] = {'x'};
+
+    cfdp_file_data_pdu_t fd = {0};
+    fd.file_data = payload;
+    fd.file_data_len = sizeof(payload);
+    fd.segment_metadata = metadata;
+    fd.segment_metadata_len = sizeof(metadata);
+
+    uint8_t buf[32];
+
+    /* Metadata supplied while the header flag says absent would put the offset
+     * somewhere the peer does not look for it. */
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_serialize(&fd,
+                                           CFDP_FILE_SIZE_SMALL,
+                                           CFDP_SEG_METADATA_ABSENT,
+                                           buf,
+                                           sizeof(buf)));
+
+    /* The 6-bit length field cannot express more than 63 octets. */
+    fd.segment_metadata_len = CFDP_SEGMENT_METADATA_MAX_LEN + 1U;
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_serialize(&fd,
+                                           CFDP_FILE_SIZE_SMALL,
+                                           CFDP_SEG_METADATA_PRESENT,
+                                           buf,
+                                           sizeof(buf)));
+
+    /* A present flag with a NULL metadata pointer but a non-zero length. */
+    fd.segment_metadata = NULL;
+    fd.segment_metadata_len = 1;
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_serialize(&fd,
+                                           CFDP_FILE_SIZE_SMALL,
+                                           CFDP_SEG_METADATA_PRESENT,
+                                           buf,
+                                           sizeof(buf)));
+    return 0;
+}
+
+static int test_file_data_segment_metadata_truncated(void)
+{
+    cfdp_file_data_pdu_t out;
+
+    /* Empty data field: no room for the record continuation octet. */
+    const uint8_t empty[] = {0x00};
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_deserialize(empty,
+                                             0,
+                                             CFDP_FILE_SIZE_SMALL,
+                                             CFDP_SEG_METADATA_PRESENT,
+                                             &out));
+
+    /* Announces 5 metadata octets but carries 2. */
+    const uint8_t short_metadata[] = {0x05, 0xAA, 0xBB};
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_deserialize(short_metadata,
+                                             sizeof(short_metadata),
+                                             CFDP_FILE_SIZE_SMALL,
+                                             CFDP_SEG_METADATA_PRESENT,
+                                             &out));
+
+    /* Metadata complete, but the 4-octet offset is truncated. */
+    const uint8_t short_offset[] = {0x01, 0xAA, 0x00, 0x00};
+    ASSERT_EQ_INT(0,
+                  cfdp_file_data_deserialize(short_offset,
+                                             sizeof(short_offset),
+                                             CFDP_FILE_SIZE_SMALL,
+                                             CFDP_SEG_METADATA_PRESENT,
+                                             &out));
+    return 0;
+}
+
+static int test_pdu_payload_size_excludes_crc(void)
+{
+    cfdp_pdu_header_t hdr;
+    fill_header(&hdr);
+    hdr.data_field_length = 10;
+
+    hdr.crc_flag = CFDP_CRC_ABSENT;
+    ASSERT_EQ_INT(10, cfdp_pdu_payload_size(&hdr));
+
+    /* §4.1.3.2: the CRC sits in the final octets of the data field and its
+     * length is counted in the data field length. */
+    hdr.crc_flag = CFDP_CRC_PRESENT;
+    ASSERT_EQ_INT(8, cfdp_pdu_payload_size(&hdr));
+
+    /* A data field too short to hold the CRC it claims is malformed. */
+    hdr.data_field_length = 1;
+    ASSERT_EQ_INT(0, cfdp_pdu_payload_size(&hdr));
+
+    ASSERT_EQ_INT(0, cfdp_pdu_payload_size(NULL));
+    return 0;
+}
+
+static int test_file_data_crc_octets_not_file_data(void)
+{
+    /* A File Data PDU whose data field is a 4-octet offset, three file octets
+     * and a 2-octet CRC. Only the three file octets may reach the file. */
+    const uint8_t data_field[] = {0x00, 0x00, 0x00, 0x00, 'A', 'B', 'C', 0x12, 0x34};
+
+    cfdp_pdu_header_t hdr;
+    fill_header(&hdr);
+    hdr.pdu_type = CFDP_PDU_TYPE_FILE_DATA;
+    hdr.crc_flag = CFDP_CRC_PRESENT;
+    hdr.data_field_length = (uint16_t)sizeof(data_field);
+
+    cfdp_file_data_pdu_t fd;
+    size_t payload_len = cfdp_pdu_payload_size(&hdr);
+    ASSERT_EQ_INT(sizeof(data_field) - CFDP_PDU_CRC_LEN, payload_len);
+    ASSERT_EQ_INT(payload_len,
+                  cfdp_file_data_deserialize(data_field,
+                                             payload_len,
+                                             hdr.large_file_flag,
+                                             hdr.segment_metadata_flag,
+                                             &fd));
+    ASSERT_EQ_INT(3, fd.file_data_len);
+    ASSERT_EQ_MEM("ABC", fd.file_data, 3);
     return 0;
 }
 
@@ -261,6 +516,13 @@ test_result_t test_cfdp_pdu_run_all(void)
     RUN_TEST(test_header_deserialize_invalid_args);
     RUN_TEST(test_file_data_serialize_invalid_args);
     RUN_TEST(test_file_data_deserialize_invalid_args);
+    RUN_TEST(test_file_data_segment_metadata_exact_bytes);
+    RUN_TEST(test_file_data_segment_metadata_roundtrip);
+    RUN_TEST(test_file_data_segment_metadata_absent_fields_cleared);
+    RUN_TEST(test_file_data_segment_metadata_mismatched_flag);
+    RUN_TEST(test_file_data_segment_metadata_truncated);
+    RUN_TEST(test_pdu_payload_size_excludes_crc);
+    RUN_TEST(test_file_data_crc_octets_not_file_data);
 
     /* cunit.h keeps its tally in file-local statics, so these counters cover
      * only the tests run above. */

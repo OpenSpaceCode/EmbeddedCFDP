@@ -19,7 +19,9 @@ retransmission and filestore are out of scope. See
 
 - **Fixed PDU header** (§5.1) — full flag set, variable-length entity IDs and
   transaction sequence numbers (1–8 octets), 32- and 64-bit (large file) modes.
-- **File Data PDU** (§5.3) — segment offset plus file data.
+- **File Data PDU** (§5.3) — segment offset plus file data, including the
+  record continuation state and segment metadata when the header's segment
+  metadata flag is set.
 - **File Directive PDUs** (§5.2) — EOF, Finished, ACK, Metadata, NAK,
   Prompt and Keep Alive.
 - **LV and TLV parameters** (§5.1.8, §5.1.9, §5.4) — filestore requests and
@@ -28,13 +30,15 @@ retransmission and filestore are out of scope. See
 - **Fault Location** (§5.2.2, §5.2.3) — encoded and decoded directly by the EOF
   and Finished codecs, which refuse to emit a fault condition without it.
 - **Modular file checksum** (§4.2.2) — streaming, segment-order independent.
+- **CRC length accounting** (§4.1.3.2) — `cfdp_pdu_payload_size()` returns the
+  payload length with any trailing CRC excluded, so the CRC octets are never
+  decoded as file data or as part of a TLV chain.
 
 ### Not Implemented
 
-- **CRC** (§4.1) — the header's CRC flag is encoded, but no CRC is computed or
-  checked.
-- **Segment metadata** in File Data PDUs (§5.3) — the header flag is encoded,
-  but the record continuation state and metadata field are not.
+- **CRC computation and checking** (§4.1) — the header's CRC flag is encoded
+  and the trailer's length is accounted for, but no CRC value is computed or
+  verified; supply and check it in the caller.
 - **Checksum types** other than modular (§4.2.2) — including the null checksum.
 - **Transaction procedures** (§4.3–§4.12) and **user operations** (§6).
 
@@ -179,7 +183,10 @@ cfdp_pdu_header_t hdr;
 size_t hlen = cfdp_pdu_header_deserialize(rx, rx_len, &hdr);
 
 const uint8_t *payload = rx + hlen;
-size_t payload_len = hdr.data_field_length;
+
+/* The data field length counts the CRC when the CRC flag is set (§4.1.3.2),
+ * so never pass hdr.data_field_length straight to a payload codec. */
+size_t payload_len = cfdp_pdu_payload_size(&hdr);
 
 if (hdr.pdu_type == CFDP_PDU_TYPE_DIRECTIVE) {
     cfdp_directive_code_t code;
@@ -187,7 +194,8 @@ if (hdr.pdu_type == CFDP_PDU_TYPE_DIRECTIVE) {
     /* dispatch on `code` (CFDP_DIRECTIVE_EOF, ...) */
 } else {
     cfdp_file_data_pdu_t fd;
-    cfdp_file_data_deserialize(payload, payload_len, hdr.large_file_flag, &fd);
+    cfdp_file_data_deserialize(payload, payload_len, hdr.large_file_flag,
+                               hdr.segment_metadata_flag, &fd);
     /* write fd.file_data_len octets at fd.offset */
 }
 ```
@@ -200,16 +208,23 @@ if (hdr.pdu_type == CFDP_PDU_TYPE_DIRECTIVE) {
 size_t cfdp_pdu_header_size(const cfdp_pdu_header_t *hdr);
 size_t cfdp_pdu_header_serialize(const cfdp_pdu_header_t *hdr, uint8_t *buf, size_t buf_len);
 size_t cfdp_pdu_header_deserialize(const uint8_t *buf, size_t buf_len, cfdp_pdu_header_t *hdr);
+size_t cfdp_pdu_payload_size(const cfdp_pdu_header_t *hdr);
 ```
 
 ### File Data (`cfdp_pdu.h`)
 
 ```c
 size_t cfdp_file_data_serialize(const cfdp_file_data_pdu_t *fd, cfdp_large_file_flag_t large,
-                                uint8_t *buf, size_t buf_len);
+                                cfdp_seg_metadata_flag_t seg_meta, uint8_t *buf, size_t buf_len);
 size_t cfdp_file_data_deserialize(const uint8_t *buf, size_t buf_len, cfdp_large_file_flag_t large,
-                                  cfdp_file_data_pdu_t *fd);
+                                  cfdp_seg_metadata_flag_t seg_meta, cfdp_file_data_pdu_t *fd);
 ```
+
+Both take the header's large-file and segment-metadata flags, which select the
+data field layout (§5.3). Pass the same values carried in the header actually
+sent or received: the serialiser rejects a payload whose segment metadata
+disagrees with the flag, since that mismatch would silently shift the offset
+field at the peer.
 
 ### Directives (`cfdp_directive.h`)
 
@@ -273,9 +288,9 @@ malformed input).
 
 - Optional TLV parameters (fault location, filestore requests/responses,
   messages to user) are not encoded or decoded.
-- File Data segment metadata is not supported (the flag must be absent).
-- The 16-bit CRC is not computed or checked; the CRC flag is preserved on the
-  wire but the trailer is left to the caller.
+- The 16-bit CRC value is not computed or checked. The flag is preserved and
+  `cfdp_pdu_payload_size()` excludes the trailer from the payload length, but
+  computing and verifying the CRC itself is left to the caller.
 - No transaction state machine, timers or retransmission logic.
 
 ## References

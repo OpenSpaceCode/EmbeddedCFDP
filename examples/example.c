@@ -95,7 +95,11 @@ static void build_file_data(uint8_t *out, size_t out_len)
     fd.file_data_len = g_file_len;
 
     uint8_t payload[64];
-    size_t plen = cfdp_file_data_serialize(&fd, hdr.large_file_flag, payload, sizeof(payload));
+    size_t plen = cfdp_file_data_serialize(&fd,
+                                           hdr.large_file_flag,
+                                           hdr.segment_metadata_flag,
+                                           payload,
+                                           sizeof(payload));
     emit_pdu("File Data", &hdr, payload, plen, out, out_len);
 }
 
@@ -118,8 +122,18 @@ static void parse_and_verify(const uint8_t *pdu, size_t pdu_len)
 {
     cfdp_pdu_header_t hdr;
     size_t hlen = cfdp_pdu_header_deserialize(pdu, pdu_len, &hdr);
+
+    /* The data field length counts the CRC when the CRC flag is set (§4.1.3.2);
+     * handing that raw length to the payload codec would append the CRC octets
+     * to the file. */
+    size_t payload_len = cfdp_pdu_payload_size(&hdr);
+
     cfdp_file_data_pdu_t fd;
-    cfdp_file_data_deserialize(&pdu[hlen], hdr.data_field_length, hdr.large_file_flag, &fd);
+    cfdp_file_data_deserialize(&pdu[hlen],
+                               payload_len,
+                               hdr.large_file_flag,
+                               hdr.segment_metadata_flag,
+                               &fd);
 
     uint32_t checksum = cfdp_checksum_update(0, fd.offset, fd.file_data, fd.file_data_len);
     printf("\nReceiver reconstructed %zu octets at offset %llu, checksum 0x%08X\n",

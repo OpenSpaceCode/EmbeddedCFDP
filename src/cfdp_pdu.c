@@ -151,35 +151,134 @@ size_t cfdp_pdu_header_deserialize(const uint8_t *buf, size_t buf_len, cfdp_pdu_
     return size;
 }
 
-size_t cfdp_file_data_serialize(const cfdp_file_data_pdu_t *fd,
-                                cfdp_large_file_flag_t large_file_flag,
-                                uint8_t *buf,
-                                size_t buf_len)
+size_t cfdp_pdu_payload_size(const cfdp_pdu_header_t *hdr)
 {
-    if ((!fd) || (!buf) || ((!fd->file_data) && (fd->file_data_len > 0)))
+    if (!hdr)
+    {
+        return 0;
+    }
+    if (hdr->crc_flag != CFDP_CRC_PRESENT)
+    {
+        return hdr->data_field_length;
+    }
+    if (hdr->data_field_length < CFDP_PDU_CRC_LEN)
     {
         return 0;
     }
 
+    return (size_t)hdr->data_field_length - CFDP_PDU_CRC_LEN;
+}
+
+/**
+ * @brief Whether a File Data payload agrees with the Segment Metadata flag.
+ *
+ * A payload carrying segment metadata under an absent flag (or the reverse)
+ * would put the offset at a different place than the header announces, which
+ * the peer decodes as file data at a wild offset rather than as an error.
+ *
+ * @param[in] fd                    Payload to check.
+ * @param[in] segment_metadata_flag Segment Metadata flag of the PDU header.
+ * @return true when @p fd may be encoded under @p segment_metadata_flag.
+ */
+static bool cfdp_segment_metadata_consistent(const cfdp_file_data_pdu_t *fd,
+                                             cfdp_seg_metadata_flag_t segment_metadata_flag)
+{
+    if (segment_metadata_flag != CFDP_SEG_METADATA_PRESENT)
+    {
+        return (fd->segment_metadata_len == 0) && (!fd->segment_metadata);
+    }
+
+    return (fd->segment_metadata_len <= CFDP_SEGMENT_METADATA_MAX_LEN) &&
+           ((fd->segment_metadata) || (fd->segment_metadata_len == 0));
+}
+
+/**
+ * @brief Write the record continuation state, metadata length and metadata.
+ *
+ * @param[in]  fd  Payload supplying the segment metadata fields.
+ * @param[out] buf Output buffer positioned at the first data field octet.
+ * @return Bytes written.
+ */
+static size_t cfdp_segment_metadata_write(const cfdp_file_data_pdu_t *fd, uint8_t *buf)
+{
+    buf[0] = (uint8_t)((((uint8_t)fd->record_continuation & 0x3U) << 6) |
+                       (fd->segment_metadata_len & 0x3FU));
+
+    if (fd->segment_metadata_len > 0)
+    {
+        memcpy(&buf[1], fd->segment_metadata, fd->segment_metadata_len);
+    }
+
+    return (size_t)fd->segment_metadata_len + 1U;
+}
+
+size_t cfdp_file_data_serialize(const cfdp_file_data_pdu_t *fd,
+                                cfdp_large_file_flag_t large_file_flag,
+                                cfdp_seg_metadata_flag_t segment_metadata_flag,
+                                uint8_t *buf,
+                                size_t buf_len)
+{
+    if ((!fd) || (!buf) || ((!fd->file_data) && (fd->file_data_len > 0)) ||
+        (!cfdp_segment_metadata_consistent(fd, segment_metadata_flag)))
+    {
+        return 0;
+    }
+
+    bool with_metadata = (segment_metadata_flag == CFDP_SEG_METADATA_PRESENT);
+    size_t metadata_size = with_metadata ? ((size_t)fd->segment_metadata_len + 1U) : 0U;
     uint8_t offset_octets = cfdp_file_size_octets(large_file_flag);
-    size_t size = (size_t)offset_octets + fd->file_data_len;
+    size_t size = metadata_size + (size_t)offset_octets + fd->file_data_len;
     if (buf_len < size)
     {
         return 0;
     }
 
-    cfdp_write_uint(buf, fd->offset, offset_octets);
+    size_t pos = with_metadata ? cfdp_segment_metadata_write(fd, buf) : 0U;
+    cfdp_write_uint(&buf[pos], fd->offset, offset_octets);
+    pos += offset_octets;
+
     if (fd->file_data_len > 0)
     {
-        memcpy(&buf[offset_octets], fd->file_data, fd->file_data_len);
+        memcpy(&buf[pos], fd->file_data, fd->file_data_len);
+        pos += fd->file_data_len;
     }
 
-    return size;
+    return pos;
+}
+
+/**
+ * @brief Decode the segment metadata preceding the offset, when present.
+ *
+ * @param[in]  buf     Data field, positioned at its first octet.
+ * @param[in]  buf_len Payload length in octets.
+ * @param[out] fd      Payload receiving the segment metadata fields.
+ * @return Bytes consumed, or 0 if the data field is too short.
+ */
+static size_t cfdp_segment_metadata_read(const uint8_t *buf,
+                                         size_t buf_len,
+                                         cfdp_file_data_pdu_t *fd)
+{
+    if (buf_len < 1U)
+    {
+        return 0;
+    }
+
+    fd->record_continuation = (cfdp_record_continuation_t)((buf[0] >> 6) & 0x3U);
+    fd->segment_metadata_len = (uint8_t)(buf[0] & 0x3FU);
+    if (buf_len < (size_t)fd->segment_metadata_len + 1U)
+    {
+        return 0;
+    }
+
+    fd->segment_metadata = (fd->segment_metadata_len > 0) ? &buf[1] : NULL;
+
+    return (size_t)fd->segment_metadata_len + 1U;
 }
 
 size_t cfdp_file_data_deserialize(const uint8_t *buf,
                                   size_t buf_len,
                                   cfdp_large_file_flag_t large_file_flag,
+                                  cfdp_seg_metadata_flag_t segment_metadata_flag,
                                   cfdp_file_data_pdu_t *fd)
 {
     if ((!buf) || (!fd))
@@ -187,15 +286,30 @@ size_t cfdp_file_data_deserialize(const uint8_t *buf,
         return 0;
     }
 
+    fd->record_continuation = CFDP_RECORD_CONT_NEITHER;
+    fd->segment_metadata = NULL;
+    fd->segment_metadata_len = 0;
+
+    size_t pos = 0;
+    if (segment_metadata_flag == CFDP_SEG_METADATA_PRESENT)
+    {
+        pos = cfdp_segment_metadata_read(buf, buf_len, fd);
+        if (pos == 0)
+        {
+            return 0;
+        }
+    }
+
     uint8_t offset_octets = cfdp_file_size_octets(large_file_flag);
-    if (buf_len < offset_octets)
+    if (buf_len < pos + offset_octets)
     {
         return 0;
     }
 
-    fd->offset = cfdp_read_uint(buf, offset_octets);
-    fd->file_data = (buf_len > offset_octets) ? &buf[offset_octets] : NULL;
-    fd->file_data_len = buf_len - offset_octets;
+    fd->offset = cfdp_read_uint(&buf[pos], offset_octets);
+    pos += offset_octets;
+    fd->file_data = (buf_len > pos) ? &buf[pos] : NULL;
+    fd->file_data_len = buf_len - pos;
 
     return buf_len;
 }
