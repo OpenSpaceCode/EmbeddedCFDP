@@ -28,8 +28,17 @@
  * Constants
  * ---------------------------------------------------------------------- */
 
-/** @brief Maximum number of segment requests decoded from a NAK PDU. */
-#define CFDP_NAK_MAX_SEGMENT_REQUESTS 32U
+/**
+ * @brief Maximum number of segment requests a NAK PDU may carry.
+ *
+ * Sizes ::cfdp_nak_pdu_t and bounds both NAK codecs, which reject a PDU
+ * needing more rather than silently dropping the excess. A NAK data field can
+ * hold far more than this, so raise it (define it before including this header)
+ * on links where the receiver routinely reports more gaps than the default.
+ */
+#ifndef CFDP_NAK_MAX_SEGMENT_REQUESTS
+#    define CFDP_NAK_MAX_SEGMENT_REQUESTS 32U
+#endif
 
 /* -------------------------------------------------------------------------
  * Types
@@ -116,8 +125,10 @@ typedef struct
 /**
  * @brief Negative Acknowledgement PDU contents (CCSDS 727.0-B-5 §5.2.6).
  *
- * @note On decode, at most ::CFDP_NAK_MAX_SEGMENT_REQUESTS requests are
- *       stored; @p segment_request_count reflects how many were kept.
+ * @note A NAK carrying more than ::CFDP_NAK_MAX_SEGMENT_REQUESTS requests is
+ *       rejected rather than truncated: every decoded request is reported in
+ *       @p segment_requests, so @p segment_request_count is never a partial
+ *       view of what the peer asked for.
  */
 typedef struct
 {
@@ -252,11 +263,20 @@ size_t cfdp_nak_serialize(const cfdp_nak_pdu_t *nak,
 /**
  * @brief Deserialise a NAK PDU data field.
  *
+ * Rejects a data field whose segment requests do not fill it exactly, and one
+ * carrying more than ::CFDP_NAK_MAX_SEGMENT_REQUESTS requests. Dropping the
+ * excess would leave the sender believing it had satisfied the NAK, so the
+ * unreported gaps would never be retransmitted.
+ *
  * @param[in]  buf             Data field, positioned at the directive code.
- * @param[in]  buf_len         Length of the data field in octets.
+ * @param[in]  buf_len         Length of the data field in octets — use
+ *                             cfdp_pdu_payload_size(), not the header's raw
+ *                             data field length.
  * @param[in]  large_file_flag Selects 32- or 64-bit offset fields.
  * @param[out] nak             Decoded contents.
- * @return Bytes consumed, or 0 on error.
+ * @return Bytes consumed (equal to @p buf_len), or 0 on error (NULL args,
+ *         wrong directive code, truncated scope, a segment request array that
+ *         does not fill the data field, or more requests than can be stored).
  */
 size_t cfdp_nak_deserialize(const uint8_t *buf,
                             size_t buf_len,

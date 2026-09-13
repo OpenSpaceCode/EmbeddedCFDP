@@ -13,6 +13,8 @@
 #include "cunit.h"
 #include "test_runners.h"
 
+#include <string.h>
+
 static int test_eof_roundtrip(void)
 {
     const uint8_t expected[] = {0x04, 0x00, 0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x10};
@@ -593,16 +595,66 @@ static int test_nak_deserialize_invalid_args(void)
     return 0;
 }
 
-static int test_nak_deserialize_caps_segment_requests(void)
+static int test_nak_deserialize_rejects_excess_segment_requests(void)
 {
-    /* One segment request more than the decoder can store. */
+    /* One segment request more than the decoder can store. Truncating would
+     * tell the sender that gaps it was never shown had been satisfied. */
     uint8_t buf[1 + 8 + (CFDP_NAK_MAX_SEGMENT_REQUESTS + 1U) * 8U] = {0};
     buf[0] = (uint8_t)CFDP_DIRECTIVE_NAK;
 
     cfdp_nak_pdu_t out = {0};
+    ASSERT_EQ_INT(0, cfdp_nak_deserialize(buf, sizeof(buf), CFDP_FILE_SIZE_SMALL, &out));
+    return 0;
+}
+
+static int test_nak_deserialize_accepts_full_segment_requests(void)
+{
+    /* Exactly the capacity must still decode, and account for every octet. */
+    uint8_t buf[1 + 8 + CFDP_NAK_MAX_SEGMENT_REQUESTS * 8U] = {0};
+    buf[0] = (uint8_t)CFDP_DIRECTIVE_NAK;
+
+    cfdp_nak_pdu_t out = {0};
     size_t n = cfdp_nak_deserialize(buf, sizeof(buf), CFDP_FILE_SIZE_SMALL, &out);
+    ASSERT_EQ_INT(sizeof(buf), n);
     ASSERT_EQ_INT(CFDP_NAK_MAX_SEGMENT_REQUESTS, out.segment_request_count);
-    ASSERT_EQ_INT(9 + CFDP_NAK_MAX_SEGMENT_REQUESTS * 8U, n);
+    return 0;
+}
+
+static int test_nak_deserialize_no_segment_requests(void)
+{
+    /* §5.2.6 allows N = 0: scope only, with no gaps to report. */
+    uint8_t buf[9] = {0};
+    buf[0] = (uint8_t)CFDP_DIRECTIVE_NAK;
+    buf[5] = 0x10;
+
+    cfdp_nak_pdu_t out;
+    memset(&out, 0xFF, sizeof(out));
+    ASSERT_EQ_INT(sizeof(buf), cfdp_nak_deserialize(buf, sizeof(buf), CFDP_FILE_SIZE_SMALL, &out));
+    ASSERT_EQ_INT(0, out.segment_request_count);
+    ASSERT_TRUE(out.start_of_scope == 0);
+    ASSERT_TRUE(out.end_of_scope == 0x10000000U);
+    return 0;
+}
+
+static int test_nak_deserialize_rejects_ragged_tail(void)
+{
+    /* §5.2.6: the segment requests fill the data field exactly. Three trailing
+     * octets are a malformed PDU, not a request that ends early. */
+    uint8_t buf[1 + 8 + 8 + 3] = {0};
+    buf[0] = (uint8_t)CFDP_DIRECTIVE_NAK;
+
+    cfdp_nak_pdu_t out = {0};
+    ASSERT_EQ_INT(0, cfdp_nak_deserialize(buf, sizeof(buf), CFDP_FILE_SIZE_SMALL, &out));
+
+    /* The same data field without the stray octets is well formed. */
+    ASSERT_EQ_INT(17, cfdp_nak_deserialize(buf, 17, CFDP_FILE_SIZE_SMALL, &out));
+    ASSERT_EQ_INT(1, out.segment_request_count);
+
+    /* A large-file NAK needs 16-octet requests, so the same 8 trailing octets
+     * that were a whole request above are now a ragged tail. */
+    uint8_t large[1 + 16 + 8] = {0};
+    large[0] = (uint8_t)CFDP_DIRECTIVE_NAK;
+    ASSERT_EQ_INT(0, cfdp_nak_deserialize(large, sizeof(large), CFDP_FILE_SIZE_LARGE, &out));
     return 0;
 }
 
@@ -681,7 +733,10 @@ test_result_t test_cfdp_directive_run_all(void)
     RUN_TEST(test_nak_roundtrip);
     RUN_TEST(test_nak_serialize_invalid_args);
     RUN_TEST(test_nak_deserialize_invalid_args);
-    RUN_TEST(test_nak_deserialize_caps_segment_requests);
+    RUN_TEST(test_nak_deserialize_rejects_excess_segment_requests);
+    RUN_TEST(test_nak_deserialize_accepts_full_segment_requests);
+    RUN_TEST(test_nak_deserialize_no_segment_requests);
+    RUN_TEST(test_nak_deserialize_rejects_ragged_tail);
     RUN_TEST(test_prompt_keepalive_roundtrip);
     RUN_TEST(test_prompt_nak_roundtrip);
     RUN_TEST(test_prompt_invalid_args);

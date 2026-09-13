@@ -406,6 +406,47 @@ size_t cfdp_nak_serialize(const cfdp_nak_pdu_t *nak,
     return pos;
 }
 
+/**
+ * @brief Decode the segment request array filling a NAK PDU's data field.
+ *
+ * @param[in]  buf     Data field, positioned at the first segment request.
+ * @param[in]  buf_len Octets remaining in the data field.
+ * @param[in]  fs      Octets per file-size-sensitive offset field.
+ * @param[out] nak     NAK contents receiving the decoded requests.
+ * @return Bytes consumed, or 0 if the requests do not fill @p buf_len exactly
+ *         or there are more than ::CFDP_NAK_MAX_SEGMENT_REQUESTS of them.
+ */
+static size_t cfdp_nak_parse_segment_requests(const uint8_t *buf,
+                                              size_t buf_len,
+                                              uint8_t fs,
+                                              cfdp_nak_pdu_t *nak)
+{
+    size_t pair = 2U * (size_t)fs;
+
+    /* §5.2.6: the data field is a whole number of segment requests. A ragged
+     * tail means the PDU is malformed, not that it ends early. Dropping
+     * requests that do not fit would leave the sender believing it had
+     * satisfied the NAK, so the missing ranges would never be retransmitted. */
+    size_t count = buf_len / pair;
+    if (((buf_len % pair) != 0) || (count > CFDP_NAK_MAX_SEGMENT_REQUESTS))
+    {
+        return 0;
+    }
+
+    size_t pos = 0;
+    nak->segment_request_count = 0;
+    for (size_t i = 0; i < count; i++)
+    {
+        nak->segment_requests[i].start_offset = cfdp_read_uint(&buf[pos], fs);
+        pos += fs;
+        nak->segment_requests[i].end_offset = cfdp_read_uint(&buf[pos], fs);
+        pos += fs;
+        nak->segment_request_count++;
+    }
+
+    return pos;
+}
+
 size_t cfdp_nak_deserialize(const uint8_t *buf,
                             size_t buf_len,
                             cfdp_large_file_flag_t large_file_flag,
@@ -429,18 +470,13 @@ size_t cfdp_nak_deserialize(const uint8_t *buf,
     nak->end_of_scope = cfdp_read_uint(&buf[pos], fs);
     pos += fs;
 
-    size_t count = (buf_len - pos) / pair;
-    nak->segment_request_count = 0;
-    for (size_t i = 0; (i < count) && (i < CFDP_NAK_MAX_SEGMENT_REQUESTS); i++)
+    size_t n = cfdp_nak_parse_segment_requests(&buf[pos], buf_len - pos, fs, nak);
+    if ((n == 0) && (buf_len != pos))
     {
-        nak->segment_requests[i].start_offset = cfdp_read_uint(&buf[pos], fs);
-        pos += fs;
-        nak->segment_requests[i].end_offset = cfdp_read_uint(&buf[pos], fs);
-        pos += fs;
-        nak->segment_request_count++;
+        return 0;
     }
 
-    return pos;
+    return pos + n;
 }
 
 size_t cfdp_prompt_serialize(cfdp_prompt_response_t response, uint8_t *buf, size_t buf_len)

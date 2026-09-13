@@ -23,7 +23,9 @@ retransmission and filestore are out of scope. See
   record continuation state and segment metadata when the header's segment
   metadata flag is set.
 - **File Directive PDUs** (§5.2) — EOF, Finished, ACK, Metadata, NAK,
-  Prompt and Keep Alive.
+  Prompt and Keep Alive. The NAK codec carries up to
+  `CFDP_NAK_MAX_SEGMENT_REQUESTS` (32 by default, overridable) segment
+  requests, and rejects a PDU needing more rather than dropping the excess.
 - **LV and TLV parameters** (§5.1.8, §5.1.9, §5.4) — filestore requests and
   responses, messages to user, fault handler overrides, flow labels and
   entity IDs.
@@ -230,6 +232,16 @@ field at the peer.
 
 `cfdp_{eof,finished,ack,metadata,nak,prompt,keep_alive}_{serialize,deserialize}()`
 — each returns the number of octets written or consumed, or `0` on error.
+
+Pass `cfdp_pdu_payload_size(&hdr)` as the data field length when decoding, not
+`hdr.data_field_length`, so a trailing CRC is not parsed as PDU content.
+
+`cfdp_nak_deserialize()` rejects a data field whose segment requests do not fill
+it exactly, and one carrying more requests than `cfdp_nak_pdu_t` can hold —
+truncating would tell the sender that gaps it never saw had been satisfied, so
+they would never be retransmitted. Raise `CFDP_NAK_MAX_SEGMENT_REQUESTS` (it
+sizes the struct: 32 requests is 536 octets on a 64-bit build) on links where the receiver
+routinely reports more gaps than the default.
 
 ### LV/TLV parameters (`cfdp_tlv.h`)
 
