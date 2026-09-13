@@ -91,7 +91,7 @@ typedef enum
  */
 typedef enum
 {
-    CFDP_HANDLER_RESERVED = 0x0,               /**< Reserved for future expansion. */
+    CFDP_HANDLER_RESERVED = 0x0,               /**< Reserved; rejected by the codecs. */
     CFDP_HANDLER_NOTICE_OF_CANCELLATION = 0x1, /**< Issue a Notice of Cancellation. */
     CFDP_HANDLER_NOTICE_OF_SUSPENSION = 0x2,   /**< Issue a Notice of Suspension. */
     CFDP_HANDLER_IGNORE_ERROR = 0x3,           /**< Ignore the error. */
@@ -235,11 +235,15 @@ size_t cfdp_entity_id_tlv_deserialize(const uint8_t *buf,
 /**
  * @brief Serialise a Fault Handler Override TLV (§5.4.4).
  *
- * @param[in]  condition_code Condition the override applies to.
- * @param[in]  handler_code   Handler to apply for that condition.
+ * @param[in]  condition_code Fault condition the override applies to; 'No error',
+ *                            'Suspend.request received', 'Cancel.request
+ *                            received' and the reserved codes are not faults.
+ * @param[in]  handler_code   Handler to apply; one of the four defined in
+ *                            table 5-19 (::CFDP_HANDLER_RESERVED is rejected).
  * @param[out] buf            Output buffer.
  * @param[in]  buf_len        Buffer capacity in octets.
- * @return Bytes written, or 0 on error.
+ * @return Bytes written, or 0 on error (NULL buffer, buffer too small, a
+ *         non-fault condition code, or a reserved handler code).
  */
 size_t cfdp_fault_handler_tlv_serialize(cfdp_condition_code_t condition_code,
                                         cfdp_fault_handler_code_t handler_code,
@@ -251,9 +255,11 @@ size_t cfdp_fault_handler_tlv_serialize(cfdp_condition_code_t condition_code,
  *
  * @param[in]  buf            Input buffer positioned at the type octet.
  * @param[in]  buf_len        Octets available in @p buf.
- * @param[out] condition_code Decoded condition code.
- * @param[out] handler_code   Decoded handler code.
- * @return Bytes consumed, or 0 on error.
+ * @param[out] condition_code Decoded condition code; left untouched on error.
+ * @param[out] handler_code   Decoded handler code; left untouched on error.
+ * @return Bytes consumed, or 0 on error (NULL args, truncated or mistyped TLV,
+ *         a value length other than 1, a non-fault condition code, or a
+ *         reserved handler code).
  */
 size_t cfdp_fault_handler_tlv_deserialize(const uint8_t *buf,
                                           size_t buf_len,

@@ -136,12 +136,43 @@ size_t cfdp_entity_id_tlv_deserialize(const uint8_t *buf,
     return (size_t)tlv.length + CFDP_TLV_HEADER_LEN;
 }
 
+/**
+ * @brief Whether a Fault Handler Override may name this condition (table 5-19).
+ *
+ * Only faults can be overridden: 'No error', 'Suspend.request received' and
+ * 'Cancel.request received' are not faults, and '1100'-'1101' are reserved in
+ * table 5-5. That leaves exactly the contiguous range '0001'-'1011'.
+ *
+ * @param[in] condition_code Condition code to check.
+ * @return true for a fault condition code.
+ */
+static bool cfdp_fault_condition_valid(cfdp_condition_code_t condition_code)
+{
+    return (condition_code >= CFDP_COND_POSITIVE_ACK_LIMIT_REACHED) &&
+           (condition_code <= CFDP_COND_UNSUPPORTED_CHECKSUM_TYPE);
+}
+
+/**
+ * @brief Whether a handler code is defined by table 5-19.
+ *
+ * '0000' is reserved for future expansion and '0101'-'1111' are reserved.
+ *
+ * @param[in] handler_code Handler code to check.
+ * @return true for one of the four defined fault handlers.
+ */
+static bool cfdp_fault_handler_valid(cfdp_fault_handler_code_t handler_code)
+{
+    return (handler_code >= CFDP_HANDLER_NOTICE_OF_CANCELLATION) &&
+           (handler_code <= CFDP_HANDLER_ABANDON_TRANSACTION);
+}
+
 size_t cfdp_fault_handler_tlv_serialize(cfdp_condition_code_t condition_code,
                                         cfdp_fault_handler_code_t handler_code,
                                         uint8_t *buf,
                                         size_t buf_len)
 {
-    if ((!buf) || (buf_len < CFDP_TLV_HEADER_LEN + 1U))
+    if ((!buf) || (buf_len < CFDP_TLV_HEADER_LEN + 1U) ||
+        (!cfdp_fault_condition_valid(condition_code)) || (!cfdp_fault_handler_valid(handler_code)))
     {
         return 0;
     }
@@ -165,8 +196,15 @@ size_t cfdp_fault_handler_tlv_deserialize(const uint8_t *buf,
         return 0;
     }
 
-    *condition_code = (cfdp_condition_code_t)((tlv.value[0] >> 4) & 0xFU);
-    *handler_code = (cfdp_fault_handler_code_t)(tlv.value[0] & 0xFU);
+    cfdp_condition_code_t condition = (cfdp_condition_code_t)((tlv.value[0] >> 4) & 0xFU);
+    cfdp_fault_handler_code_t handler = (cfdp_fault_handler_code_t)(tlv.value[0] & 0xFU);
+    if ((!cfdp_fault_condition_valid(condition)) || (!cfdp_fault_handler_valid(handler)))
+    {
+        return 0;
+    }
+
+    *condition_code = condition;
+    *handler_code = handler;
 
     return CFDP_TLV_HEADER_LEN + 1U;
 }

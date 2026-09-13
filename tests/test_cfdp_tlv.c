@@ -180,14 +180,17 @@ static int test_fault_handler_tlv_invalid_args(void)
     cfdp_condition_code_t condition = CFDP_COND_NO_ERROR;
     cfdp_fault_handler_code_t handler = CFDP_HANDLER_RESERVED;
 
+    /* A valid condition/handler pair, so only the buffer is at fault. */
     ASSERT_EQ_INT(0,
-                  cfdp_fault_handler_tlv_serialize(CFDP_COND_NO_ERROR,
+                  cfdp_fault_handler_tlv_serialize(CFDP_COND_INACTIVITY_DETECTED,
                                                    CFDP_HANDLER_IGNORE_ERROR,
                                                    NULL,
                                                    sizeof(buf)));
-    ASSERT_EQ_INT(
-        0,
-        cfdp_fault_handler_tlv_serialize(CFDP_COND_NO_ERROR, CFDP_HANDLER_IGNORE_ERROR, buf, 2));
+    ASSERT_EQ_INT(0,
+                  cfdp_fault_handler_tlv_serialize(CFDP_COND_INACTIVITY_DETECTED,
+                                                   CFDP_HANDLER_IGNORE_ERROR,
+                                                   buf,
+                                                   2));
 
     ASSERT_EQ_INT(3,
                   cfdp_fault_handler_tlv_serialize(CFDP_COND_NAK_LIMIT_REACHED,
@@ -203,6 +206,113 @@ static int test_fault_handler_tlv_invalid_args(void)
     buf[0] = (uint8_t)CFDP_TLV_FAULT_HANDLER_OVERRIDE;
     buf[1] = 2;
     ASSERT_EQ_INT(0, cfdp_fault_handler_tlv_deserialize(buf, sizeof(buf), &condition, &handler));
+    return 0;
+}
+
+static int test_fault_handler_tlv_rejects_non_fault_conditions(void)
+{
+    uint8_t buf[8];
+
+    /* Table 5-19: these conditions are not faults, so cannot be overridden. */
+    const cfdp_condition_code_t not_faults[] = {CFDP_COND_NO_ERROR,
+                                                CFDP_COND_SUSPEND_REQUEST_RECEIVED,
+                                                CFDP_COND_CANCEL_REQUEST_RECEIVED,
+                                                (cfdp_condition_code_t)0xC,
+                                                (cfdp_condition_code_t)0xD};
+    for (size_t i = 0; i < sizeof(not_faults) / sizeof(not_faults[0]); i++)
+    {
+        ASSERT_EQ_INT(0,
+                      cfdp_fault_handler_tlv_serialize(not_faults[i],
+                                                       CFDP_HANDLER_IGNORE_ERROR,
+                                                       buf,
+                                                       sizeof(buf)));
+    }
+
+    /* Every fault condition, '0001' through '1011', is accepted. */
+    for (uint8_t c = 0x1; c <= 0xB; c++)
+    {
+        ASSERT_EQ_INT(3,
+                      cfdp_fault_handler_tlv_serialize((cfdp_condition_code_t)c,
+                                                       CFDP_HANDLER_IGNORE_ERROR,
+                                                       buf,
+                                                       sizeof(buf)));
+    }
+    return 0;
+}
+
+static int test_fault_handler_tlv_rejects_reserved_handlers(void)
+{
+    uint8_t buf[8];
+
+    /* '0000' and '0101'-'1111' are reserved in table 5-19. */
+    ASSERT_EQ_INT(0,
+                  cfdp_fault_handler_tlv_serialize(CFDP_COND_FILE_SIZE_ERROR,
+                                                   CFDP_HANDLER_RESERVED,
+                                                   buf,
+                                                   sizeof(buf)));
+    for (uint8_t h = 0x5; h <= 0xF; h++)
+    {
+        ASSERT_EQ_INT(0,
+                      cfdp_fault_handler_tlv_serialize(CFDP_COND_FILE_SIZE_ERROR,
+                                                       (cfdp_fault_handler_code_t)h,
+                                                       buf,
+                                                       sizeof(buf)));
+    }
+
+    /* The four defined handlers are accepted. */
+    for (uint8_t h = 0x1; h <= 0x4; h++)
+    {
+        ASSERT_EQ_INT(3,
+                      cfdp_fault_handler_tlv_serialize(CFDP_COND_FILE_SIZE_ERROR,
+                                                       (cfdp_fault_handler_code_t)h,
+                                                       buf,
+                                                       sizeof(buf)));
+    }
+    return 0;
+}
+
+static int test_fault_handler_tlv_deserialize_rejects_invalid_codes(void)
+{
+    cfdp_condition_code_t condition = CFDP_COND_FILE_SIZE_ERROR;
+    cfdp_fault_handler_code_t handler = CFDP_HANDLER_ABANDON_TRANSACTION;
+
+    /* Condition 'No error' with a valid handler. */
+    const uint8_t no_error[] = {0x04, 0x01, 0x03};
+    ASSERT_EQ_INT(
+        0,
+        cfdp_fault_handler_tlv_deserialize(no_error, sizeof(no_error), &condition, &handler));
+
+    /* Condition 'Cancel.request received' with a valid handler. */
+    const uint8_t cancel[] = {0x04, 0x01, 0xF3};
+    ASSERT_EQ_INT(0,
+                  cfdp_fault_handler_tlv_deserialize(cancel, sizeof(cancel), &condition, &handler));
+
+    /* A fault condition with the reserved handler '0000'. */
+    const uint8_t reserved_zero[] = {0x04, 0x01, 0x50};
+    ASSERT_EQ_INT(0,
+                  cfdp_fault_handler_tlv_deserialize(reserved_zero,
+                                                     sizeof(reserved_zero),
+                                                     &condition,
+                                                     &handler));
+
+    /* A fault condition with the reserved handler '0101'. */
+    const uint8_t reserved_five[] = {0x04, 0x01, 0x55};
+    ASSERT_EQ_INT(0,
+                  cfdp_fault_handler_tlv_deserialize(reserved_five,
+                                                     sizeof(reserved_five),
+                                                     &condition,
+                                                     &handler));
+
+    /* A rejected TLV leaves the outputs as they were. */
+    ASSERT_EQ_INT(CFDP_COND_FILE_SIZE_ERROR, condition);
+    ASSERT_EQ_INT(CFDP_HANDLER_ABANDON_TRANSACTION, handler);
+
+    /* 'File checksum failure' -> 'Notice of Suspension' decodes. */
+    const uint8_t valid[] = {0x04, 0x01, 0x52};
+    ASSERT_EQ_INT(3,
+                  cfdp_fault_handler_tlv_deserialize(valid, sizeof(valid), &condition, &handler));
+    ASSERT_EQ_INT(CFDP_COND_FILE_CHECKSUM_FAILURE, condition);
+    ASSERT_EQ_INT(CFDP_HANDLER_NOTICE_OF_SUSPENSION, handler);
     return 0;
 }
 
@@ -448,6 +558,9 @@ test_result_t test_cfdp_tlv_run_all(void)
     RUN_TEST(test_entity_id_tlv_invalid_args);
     RUN_TEST(test_fault_handler_tlv_roundtrip);
     RUN_TEST(test_fault_handler_tlv_invalid_args);
+    RUN_TEST(test_fault_handler_tlv_rejects_non_fault_conditions);
+    RUN_TEST(test_fault_handler_tlv_rejects_reserved_handlers);
+    RUN_TEST(test_fault_handler_tlv_deserialize_rejects_invalid_codes);
     RUN_TEST(test_filestore_action_second_filename);
     RUN_TEST(test_filestore_request_roundtrip);
     RUN_TEST(test_filestore_request_second_filename);
