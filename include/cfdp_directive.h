@@ -171,6 +171,11 @@ size_t cfdp_eof_serialize(const cfdp_eof_pdu_t *eof,
 /**
  * @brief Deserialise an EOF PDU data field.
  *
+ * @note Deliberately lenient: unlike cfdp_eof_serialize(), this does not
+ *       enforce the §5.2.2 Fault Location rule. A PDU is accepted whether or
+ *       not the TLV matches its condition code; check @p eof->fault_location_len
+ *       if the rule matters to the caller.
+ *
  * @param[in]  buf             Data field, positioned at the directive code.
  * @param[in]  buf_len         Length of the data field in octets.
  * @param[in]  large_file_flag Selects a 32- or 64-bit file size field.
@@ -197,6 +202,11 @@ size_t cfdp_finished_serialize(const cfdp_finished_pdu_t *fin, uint8_t *buf, siz
 
 /**
  * @brief Deserialise a Finished PDU data field.
+ *
+ * @note Deliberately lenient: unlike cfdp_finished_serialize(), this does not
+ *       enforce the §5.2.3 Fault Location rule. A PDU is accepted whether or
+ *       not the TLV matches its condition code; check @p fin->fault_location_len
+ *       if the rule matters to the caller.
  *
  * @param[in]  buf     Data field, positioned at the directive code.
  * @param[in]  buf_len Length of the data field in octets.
