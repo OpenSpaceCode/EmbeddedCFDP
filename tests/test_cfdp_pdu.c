@@ -221,6 +221,7 @@ static int test_header_deserialize_invalid_args(void)
 {
     cfdp_pdu_header_t hdr;
     uint8_t buf[CFDP_PDU_HEADER_MAX_LEN] = {0};
+    buf[0] = 0x20; /* version '001', so only the argument under test is at fault */
 
     ASSERT_EQ_INT(0, cfdp_pdu_header_deserialize(NULL, sizeof(buf), &hdr));
     ASSERT_EQ_INT(0, cfdp_pdu_header_deserialize(buf, sizeof(buf), NULL));
@@ -230,6 +231,42 @@ static int test_header_deserialize_invalid_args(void)
      * hold the identifier fields the header announces. */
     const uint8_t truncated[] = {0x20, 0x00, 0x0A, 0x77};
     ASSERT_EQ_INT(0, cfdp_pdu_header_deserialize(truncated, sizeof(truncated), &hdr));
+    return 0;
+}
+
+static int test_header_serialize_rejects_other_versions(void)
+{
+    cfdp_pdu_header_t hdr;
+    fill_header(&hdr);
+    uint8_t buf[CFDP_PDU_HEADER_MAX_LEN];
+
+    /* §5.1.2, table 5-1: the version field is '001'. Version 9 is included
+     * because masking it to 3 bits would silently emit '001'. */
+    const uint8_t bad_versions[] = {0, 2, 7, 9};
+    for (size_t i = 0; i < sizeof(bad_versions); i++)
+    {
+        hdr.version = bad_versions[i];
+        ASSERT_EQ_INT(0, cfdp_pdu_header_serialize(&hdr, buf, sizeof(buf)));
+    }
+
+    hdr.version = CFDP_PROTOCOL_VERSION;
+    ASSERT_EQ_INT(7, cfdp_pdu_header_serialize(&hdr, buf, sizeof(buf)));
+    return 0;
+}
+
+static int test_header_deserialize_rejects_other_versions(void)
+{
+    cfdp_pdu_header_t hdr;
+
+    /* A complete header with 1-octet IDs; only the version bits vary. The
+     * other octet-0 bits are left clear. */
+    uint8_t buf[] = {0x00, 0x00, 0x0A, 0x00, 0x01, 0x02, 0x03};
+    for (uint8_t version = 0; version <= 7; version++)
+    {
+        buf[0] = (uint8_t)(version << 5);
+        size_t expected = (version == CFDP_PROTOCOL_VERSION) ? sizeof(buf) : 0U;
+        ASSERT_EQ_INT(expected, cfdp_pdu_header_deserialize(buf, sizeof(buf), &hdr));
+    }
     return 0;
 }
 
@@ -514,6 +551,8 @@ test_result_t test_cfdp_pdu_run_all(void)
     RUN_TEST(test_header_size_invalid_lengths);
     RUN_TEST(test_header_serialize_invalid_args);
     RUN_TEST(test_header_deserialize_invalid_args);
+    RUN_TEST(test_header_serialize_rejects_other_versions);
+    RUN_TEST(test_header_deserialize_rejects_other_versions);
     RUN_TEST(test_file_data_serialize_invalid_args);
     RUN_TEST(test_file_data_deserialize_invalid_args);
     RUN_TEST(test_file_data_segment_metadata_exact_bytes);

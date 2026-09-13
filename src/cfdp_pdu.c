@@ -72,7 +72,7 @@ static uint8_t cfdp_pack_octet3(const cfdp_pdu_header_t *hdr)
 
 size_t cfdp_pdu_header_serialize(const cfdp_pdu_header_t *hdr, uint8_t *buf, size_t buf_len)
 {
-    if ((!hdr) || (!buf))
+    if ((!hdr) || (!buf) || (hdr->version != CFDP_PROTOCOL_VERSION))
     {
         return 0;
     }
@@ -131,6 +131,13 @@ size_t cfdp_pdu_header_deserialize(const uint8_t *buf, size_t buf_len, cfdp_pdu_
     }
 
     cfdp_unpack_flags(buf, hdr);
+
+    /* §5.1.2: only version '001' is defined. Other versions may lay out the
+     * header or data field differently, so decoding one here would misread it. */
+    if (hdr->version != CFDP_PROTOCOL_VERSION)
+    {
+        return 0;
+    }
 
     /* cfdp_unpack_flags always yields identifier lengths of 1..8 octets, so the
      * size == 0 arm is unreachable here; it guards against future decoding

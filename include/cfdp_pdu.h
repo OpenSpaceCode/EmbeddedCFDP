@@ -31,7 +31,7 @@
  */
 typedef struct
 {
-    uint8_t version;                                /**< Protocol version (3-bit field). */
+    uint8_t version;                                /**< Must be ::CFDP_PROTOCOL_VERSION. */
     cfdp_pdu_type_t pdu_type;                       /**< Directive or File Data. */
     cfdp_direction_t direction;                     /**< Toward receiver or sender. */
     cfdp_transmission_mode_t transmission_mode;     /**< Acknowledged or unacknowledged. */
@@ -89,8 +89,8 @@ size_t cfdp_pdu_header_size(const cfdp_pdu_header_t *hdr);
  * @param[in]  hdr     Header to serialise.
  * @param[out] buf     Output buffer.
  * @param[in]  buf_len Buffer capacity in octets.
- * @return Bytes written, or 0 on error (NULL args, bad identifier lengths,
- *         or buffer too small).
+ * @return Bytes written, or 0 on error (NULL args, a version other than
+ *         ::CFDP_PROTOCOL_VERSION, bad identifier lengths, or buffer too small).
  */
 size_t cfdp_pdu_header_serialize(const cfdp_pdu_header_t *hdr, uint8_t *buf, size_t buf_len);
 
@@ -99,9 +99,9 @@ size_t cfdp_pdu_header_serialize(const cfdp_pdu_header_t *hdr, uint8_t *buf, siz
  *
  * @param[in]  buf     Input buffer positioned at the start of the header.
  * @param[in]  buf_len Number of octets available in @p buf.
- * @param[out] hdr     Decoded header.
- * @return Header size in octets consumed, or 0 on error (NULL args or
- *         truncated header).
+ * @param[out] hdr     Decoded header; may be partly written on error.
+ * @return Header size in octets consumed, or 0 on error (NULL args, a version
+ *         other than ::CFDP_PROTOCOL_VERSION, or truncated header).
  */
 size_t cfdp_pdu_header_deserialize(const uint8_t *buf, size_t buf_len, cfdp_pdu_header_t *hdr);
 
