@@ -236,6 +236,11 @@ field at the peer.
 Pass `cfdp_pdu_payload_size(&hdr)` as the data field length when decoding, not
 `hdr.data_field_length`, so a trailing CRC is not parsed as PDU content.
 
+The ACK codec derives the directive subtype code from the acknowledged
+directive per table 5-8 — `0001` for a Finished PDU, `0000` for any other — so
+`cfdp_ack_pdu_t` has no subtype field to set wrongly, and a received ACK whose
+subtype disagrees with its directive code is rejected.
+
 `cfdp_nak_deserialize()` rejects a data field whose segment requests do not fill
 it exactly, and one carrying more requests than `cfdp_nak_pdu_t` can hold —
 truncating would tell the sender that gaps it never saw had been satisfied, so

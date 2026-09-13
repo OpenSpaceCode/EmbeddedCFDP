@@ -190,7 +190,6 @@ static int test_ack_roundtrip(void)
 {
     cfdp_ack_pdu_t ack = {0};
     ack.ack_directive_code = CFDP_DIRECTIVE_FINISHED;
-    ack.directive_subtype = 1;
     ack.condition_code = CFDP_COND_NO_ERROR;
     ack.transaction_status = CFDP_TXN_STATUS_ACTIVE;
 
@@ -201,8 +200,75 @@ static int test_ack_roundtrip(void)
     cfdp_ack_pdu_t out = {0};
     ASSERT_EQ_INT(3, cfdp_ack_deserialize(buf, n, &out));
     ASSERT_EQ_INT(CFDP_DIRECTIVE_FINISHED, out.ack_directive_code);
-    ASSERT_EQ_INT(1, out.directive_subtype);
     ASSERT_EQ_INT(CFDP_TXN_STATUS_ACTIVE, out.transaction_status);
+    return 0;
+}
+
+static int test_ack_exact_bytes(void)
+{
+    /* Table 5-8: acknowledged directive code and subtype share octet 1; the
+     * condition code, two spare bits and transaction status share octet 2. */
+    cfdp_ack_pdu_t ack = {0};
+    ack.ack_directive_code = CFDP_DIRECTIVE_FINISHED;
+    ack.condition_code = CFDP_COND_FILE_CHECKSUM_FAILURE;
+    ack.transaction_status = CFDP_TXN_STATUS_TERMINATED;
+
+    uint8_t buf[8];
+    ASSERT_EQ_INT(3, cfdp_ack_serialize(&ack, buf, sizeof(buf)));
+
+    const uint8_t expected_finished[] = {0x06, 0x51, 0x52};
+    ASSERT_EQ_MEM(expected_finished, buf, sizeof(expected_finished));
+
+    /* An ACK of EOF takes subtype '0000' instead. */
+    ack.ack_directive_code = CFDP_DIRECTIVE_EOF;
+    ASSERT_EQ_INT(3, cfdp_ack_serialize(&ack, buf, sizeof(buf)));
+
+    const uint8_t expected_eof[] = {0x06, 0x40, 0x52};
+    ASSERT_EQ_MEM(expected_eof, buf, sizeof(expected_eof));
+    return 0;
+}
+
+static int test_ack_subtype_is_derived(void)
+{
+    /* The subtype is not a caller field, so an ACK of Finished always carries
+     * '0001' and an ACK of any other directive always carries '0000'. */
+    cfdp_ack_pdu_t ack = {0};
+    uint8_t buf[8];
+
+    ack.ack_directive_code = CFDP_DIRECTIVE_FINISHED;
+    ASSERT_EQ_INT(3, cfdp_ack_serialize(&ack, buf, sizeof(buf)));
+    ASSERT_EQ_INT(CFDP_ACK_SUBTYPE_FINISHED, buf[1] & 0x0FU);
+
+    ack.ack_directive_code = CFDP_DIRECTIVE_EOF;
+    ASSERT_EQ_INT(3, cfdp_ack_serialize(&ack, buf, sizeof(buf)));
+    ASSERT_EQ_INT(CFDP_ACK_SUBTYPE_OTHER, buf[1] & 0x0FU);
+    return 0;
+}
+
+static int test_ack_deserialize_rejects_wrong_subtype(void)
+{
+    cfdp_ack_pdu_t out = {0};
+
+    /* ACK of Finished must carry subtype '0001', not '0000'. */
+    uint8_t finished_zero[] = {0x06, 0x50, 0x00};
+    ASSERT_EQ_INT(0, cfdp_ack_deserialize(finished_zero, sizeof(finished_zero), &out));
+
+    /* ACK of EOF must carry subtype '0000', not '0001'. */
+    uint8_t eof_one[] = {0x06, 0x41, 0x00};
+    ASSERT_EQ_INT(0, cfdp_ack_deserialize(eof_one, sizeof(eof_one), &out));
+
+    /* Any other subtype value is equally invalid. */
+    uint8_t finished_seven[] = {0x06, 0x57, 0x00};
+    ASSERT_EQ_INT(0, cfdp_ack_deserialize(finished_seven, sizeof(finished_seven), &out));
+
+    /* The conformant encodings of both still decode. */
+    uint8_t finished_ok[] = {0x06, 0x51, 0x00};
+    ASSERT_EQ_INT(3, cfdp_ack_deserialize(finished_ok, sizeof(finished_ok), &out));
+    ASSERT_EQ_INT(CFDP_DIRECTIVE_FINISHED, out.ack_directive_code);
+
+    uint8_t eof_ok[] = {0x06, 0x40, 0x00};
+    ASSERT_EQ_INT(3, cfdp_ack_deserialize(eof_ok, sizeof(eof_ok), &out));
+    ASSERT_EQ_INT(CFDP_DIRECTIVE_EOF, out.ack_directive_code);
     return 0;
 }
 
@@ -723,6 +789,9 @@ test_result_t test_cfdp_directive_run_all(void)
     RUN_TEST(test_finished_deserialize_bad_tlvs);
     RUN_TEST(test_finished_invalid_args);
     RUN_TEST(test_ack_roundtrip);
+    RUN_TEST(test_ack_exact_bytes);
+    RUN_TEST(test_ack_subtype_is_derived);
+    RUN_TEST(test_ack_deserialize_rejects_wrong_subtype);
     RUN_TEST(test_ack_invalid_args);
     RUN_TEST(test_metadata_roundtrip);
     RUN_TEST(test_metadata_empty_filenames);

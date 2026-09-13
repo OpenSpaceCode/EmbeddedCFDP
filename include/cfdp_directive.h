@@ -40,6 +40,12 @@
 #    define CFDP_NAK_MAX_SEGMENT_REQUESTS 32U
 #endif
 
+/** @brief Directive subtype code of an ACK of a Finished PDU (§5.2.4, table 5-8). */
+#define CFDP_ACK_SUBTYPE_FINISHED 1U
+
+/** @brief Directive subtype code of an ACK of any other file directive (§5.2.4, table 5-8). */
+#define CFDP_ACK_SUBTYPE_OTHER 0U
+
 /* -------------------------------------------------------------------------
  * Types
  * ---------------------------------------------------------------------- */
@@ -82,11 +88,16 @@ typedef struct
 
 /**
  * @brief Acknowledgement PDU contents (CCSDS 727.0-B-5 §5.2.4).
+ *
+ * @note Table 5-8 fixes the directive subtype code as a function of the
+ *       acknowledged directive — ::CFDP_ACK_SUBTYPE_FINISHED for an ACK of a
+ *       Finished PDU, ::CFDP_ACK_SUBTYPE_OTHER for every other — so it is not a
+ *       field here: the codec derives it on encode and rejects a PDU carrying
+ *       the wrong value on decode.
  */
 typedef struct
 {
     cfdp_directive_code_t ack_directive_code; /**< Directive being acknowledged (EOF/Finished). */
-    uint8_t directive_subtype;                /**< Directive subtype code (4-bit field). */
     cfdp_condition_code_t condition_code;     /**< Condition code being acknowledged. */
     cfdp_transaction_status_t transaction_status; /**< Sender's view of the transaction. */
 } cfdp_ack_pdu_t;
@@ -199,6 +210,9 @@ size_t cfdp_finished_deserialize(const uint8_t *buf, size_t buf_len, cfdp_finish
 /**
  * @brief Serialise an ACK PDU data field.
  *
+ * The directive subtype code is derived from @p ack->ack_directive_code per
+ * table 5-8; it cannot be supplied, so a mismatched pair cannot be emitted.
+ *
  * @param[in]  ack     ACK contents to serialise.
  * @param[out] buf     Output buffer.
  * @param[in]  buf_len Buffer capacity in octets.
@@ -212,7 +226,9 @@ size_t cfdp_ack_serialize(const cfdp_ack_pdu_t *ack, uint8_t *buf, size_t buf_le
  * @param[in]  buf     Data field, positioned at the directive code.
  * @param[in]  buf_len Length of the data field in octets.
  * @param[out] ack     Decoded ACK contents.
- * @return Bytes consumed, or 0 on error.
+ * @return Bytes consumed, or 0 on error (NULL args, wrong directive code,
+ *         truncated input, or a directive subtype code that table 5-8 does not
+ *         allow for the acknowledged directive).
  */
 size_t cfdp_ack_deserialize(const uint8_t *buf, size_t buf_len, cfdp_ack_pdu_t *ack);
 

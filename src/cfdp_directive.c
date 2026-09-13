@@ -238,6 +238,19 @@ size_t cfdp_finished_deserialize(const uint8_t *buf, size_t buf_len, cfdp_finish
     return cfdp_finished_parse_tlvs(buf, buf_len, fin);
 }
 
+/**
+ * @brief Directive subtype code table 5-8 requires for an acknowledged PDU.
+ *
+ * @param[in] ack_directive_code Directive the ACK acknowledges.
+ * @return ::CFDP_ACK_SUBTYPE_FINISHED for a Finished PDU, else
+ *         ::CFDP_ACK_SUBTYPE_OTHER.
+ */
+static uint8_t cfdp_ack_directive_subtype(cfdp_directive_code_t ack_directive_code)
+{
+    return (ack_directive_code == CFDP_DIRECTIVE_FINISHED) ? CFDP_ACK_SUBTYPE_FINISHED
+                                                           : CFDP_ACK_SUBTYPE_OTHER;
+}
+
 size_t cfdp_ack_serialize(const cfdp_ack_pdu_t *ack, uint8_t *buf, size_t buf_len)
 {
     if ((!ack) || (!buf) || (buf_len < 3U))
@@ -247,7 +260,7 @@ size_t cfdp_ack_serialize(const cfdp_ack_pdu_t *ack, uint8_t *buf, size_t buf_le
 
     buf[0] = (uint8_t)CFDP_DIRECTIVE_ACK;
     buf[1] = (uint8_t)((((uint8_t)ack->ack_directive_code & 0xFU) << 4) |
-                       (ack->directive_subtype & 0xFU));
+                       (cfdp_ack_directive_subtype(ack->ack_directive_code) & 0xFU));
     buf[2] = (uint8_t)((((uint8_t)ack->condition_code & 0xFU) << 4) |
                        ((uint8_t)ack->transaction_status & 0x3U));
 
@@ -262,7 +275,14 @@ size_t cfdp_ack_deserialize(const uint8_t *buf, size_t buf_len, cfdp_ack_pdu_t *
     }
 
     ack->ack_directive_code = (cfdp_directive_code_t)((buf[1] >> 4) & 0xFU);
-    ack->directive_subtype = (uint8_t)(buf[1] & 0xFU);
+
+    /* Table 5-8 fixes the subtype for each acknowledged directive, so a value
+     * other than the required one makes the ACK unparseable by its peer. */
+    if ((buf[1] & 0xFU) != cfdp_ack_directive_subtype(ack->ack_directive_code))
+    {
+        return 0;
+    }
+
     ack->condition_code = (cfdp_condition_code_t)((buf[2] >> 4) & 0xFU);
     ack->transaction_status = (cfdp_transaction_status_t)(buf[2] & 0x3U);
 
