@@ -22,6 +22,32 @@ bool cfdp_filestore_action_has_second_filename(cfdp_filestore_action_t action_co
            (action_code == CFDP_FS_ACTION_REPLACE_FILE);
 }
 
+/**
+ * @brief Whether a filestore action code is defined by table 5-16.
+ *
+ * Only '0000'-'1000' are defined; the 4-bit field can carry '1001'-'1111',
+ * which a receiving filestore could not act on.
+ *
+ * @param[in] action_code Filestore action code to check.
+ * @return true for Create File through Deny Directory.
+ */
+static bool cfdp_filestore_action_valid(cfdp_filestore_action_t action_code)
+{
+    /* The unsigned cast also rejects negative values forced into the enum. */
+    return (uint32_t)action_code <= (uint32_t)CFDP_FS_ACTION_DENY_DIRECTORY;
+}
+
+/**
+ * @brief Action code carried in the first value octet of a filestore TLV.
+ *
+ * @param[in] tlv Decoded filestore TLV with a value at least one octet long.
+ * @return The 4-bit action code.
+ */
+static cfdp_filestore_action_t cfdp_filestore_tlv_action(const cfdp_tlv_t *tlv)
+{
+    return (cfdp_filestore_action_t)((tlv->value[0] >> 4) & 0xFU);
+}
+
 size_t cfdp_lv_serialize(const char *value, uint8_t value_len, uint8_t *buf, size_t buf_len)
 {
     if ((!buf) || ((!value) && (value_len > 0)) ||
@@ -313,7 +339,8 @@ size_t cfdp_filestore_request_tlv_serialize(const cfdp_filestore_request_t *req,
                                             uint8_t *buf,
                                             size_t buf_len)
 {
-    if ((!req) || (!buf) || (buf_len < CFDP_TLV_HEADER_LEN + 1U))
+    if ((!req) || (!buf) || (buf_len < CFDP_TLV_HEADER_LEN + 1U) ||
+        (!cfdp_filestore_action_valid(req->action_code)))
     {
         return 0;
     }
@@ -344,13 +371,14 @@ size_t cfdp_filestore_request_tlv_deserialize(const uint8_t *buf,
 {
     cfdp_tlv_t tlv;
     if ((!req) || (cfdp_tlv_deserialize(buf, buf_len, &tlv) == 0) ||
-        (tlv.type != (uint8_t)CFDP_TLV_FILESTORE_REQUEST) || (tlv.length < 1U))
+        (tlv.type != (uint8_t)CFDP_TLV_FILESTORE_REQUEST) || (tlv.length < 1U) ||
+        (!cfdp_filestore_action_valid(cfdp_filestore_tlv_action(&tlv))))
     {
         return 0;
     }
 
     memset(req, 0, sizeof(*req));
-    req->action_code = (cfdp_filestore_action_t)((tlv.value[0] >> 4) & 0xFU);
+    req->action_code = cfdp_filestore_tlv_action(&tlv);
 
     size_t n = cfdp_filestore_names_deserialize(
         &tlv.value[1],
@@ -374,7 +402,8 @@ size_t cfdp_filestore_response_tlv_serialize(const cfdp_filestore_response_t *re
                                              uint8_t *buf,
                                              size_t buf_len)
 {
-    if ((!resp) || (!buf) || (buf_len < CFDP_TLV_HEADER_LEN + 1U))
+    if ((!resp) || (!buf) || (buf_len < CFDP_TLV_HEADER_LEN + 1U) ||
+        (!cfdp_filestore_action_valid(resp->action_code)))
     {
         return 0;
     }
@@ -413,13 +442,14 @@ size_t cfdp_filestore_response_tlv_deserialize(const uint8_t *buf,
 {
     cfdp_tlv_t tlv;
     if ((!resp) || (cfdp_tlv_deserialize(buf, buf_len, &tlv) == 0) ||
-        (tlv.type != (uint8_t)CFDP_TLV_FILESTORE_RESPONSE) || (tlv.length < 1U))
+        (tlv.type != (uint8_t)CFDP_TLV_FILESTORE_RESPONSE) || (tlv.length < 1U) ||
+        (!cfdp_filestore_action_valid(cfdp_filestore_tlv_action(&tlv))))
     {
         return 0;
     }
 
     memset(resp, 0, sizeof(*resp));
-    resp->action_code = (cfdp_filestore_action_t)((tlv.value[0] >> 4) & 0xFU);
+    resp->action_code = cfdp_filestore_tlv_action(&tlv);
     resp->status_code = (cfdp_filestore_status_t)(tlv.value[0] & 0xFU);
 
     size_t pos = cfdp_filestore_names_deserialize(

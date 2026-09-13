@@ -522,6 +522,95 @@ static int test_filestore_response_malformed_value(void)
     return 0;
 }
 
+static int test_filestore_request_rejects_undefined_actions(void)
+{
+    /* Both names supplied, so every defined action encodes regardless of
+     * whether it carries a second file name. */
+    cfdp_filestore_request_t req = {0};
+    req.first_filename = "a";
+    req.first_filename_len = 1;
+    req.second_filename = "b";
+    req.second_filename_len = 1;
+
+    uint8_t buf[16];
+    for (uint8_t code = 0x0; code <= 0xF; code++)
+    {
+        req.action_code = (cfdp_filestore_action_t)code;
+        size_t n = cfdp_filestore_request_tlv_serialize(&req, buf, sizeof(buf));
+
+        /* Table 5-16 defines '0000'-'1000' only. */
+        if (code <= CFDP_FS_ACTION_DENY_DIRECTORY)
+        {
+            ASSERT_TRUE(n > 0);
+        }
+        else
+        {
+            ASSERT_EQ_INT(0, n);
+        }
+    }
+    return 0;
+}
+
+static int test_filestore_response_rejects_undefined_actions(void)
+{
+    cfdp_filestore_response_t resp = {0};
+    resp.first_filename = "a";
+    resp.first_filename_len = 1;
+    resp.second_filename = "b";
+    resp.second_filename_len = 1;
+
+    uint8_t buf[16];
+    for (uint8_t code = 0x0; code <= 0xF; code++)
+    {
+        resp.action_code = (cfdp_filestore_action_t)code;
+        size_t n = cfdp_filestore_response_tlv_serialize(&resp, buf, sizeof(buf));
+
+        /* Table 5-17: the action code is as for the Filestore Request TLV. */
+        if (code <= CFDP_FS_ACTION_DENY_DIRECTORY)
+        {
+            ASSERT_TRUE(n > 0);
+        }
+        else
+        {
+            ASSERT_EQ_INT(0, n);
+        }
+    }
+    return 0;
+}
+
+static int test_filestore_tlv_deserialize_rejects_undefined_actions(void)
+{
+    cfdp_filestore_request_t req = {0};
+    cfdp_filestore_response_t resp = {0};
+
+    /* Well-formed apart from the action code: one empty file name LV. */
+    const uint8_t req_action_9[] = {CFDP_TLV_FILESTORE_REQUEST, 0x02, 0x90, 0x00};
+    ASSERT_EQ_INT(0,
+                  cfdp_filestore_request_tlv_deserialize(req_action_9, sizeof(req_action_9), &req));
+    const uint8_t req_action_f[] = {CFDP_TLV_FILESTORE_REQUEST, 0x02, 0xF0, 0x00};
+    ASSERT_EQ_INT(0,
+                  cfdp_filestore_request_tlv_deserialize(req_action_f, sizeof(req_action_f), &req));
+
+    /* Deny Directory, '1000', is the last defined action and still decodes. */
+    const uint8_t req_action_8[] = {CFDP_TLV_FILESTORE_REQUEST, 0x02, 0x80, 0x00};
+    ASSERT_EQ_INT(4,
+                  cfdp_filestore_request_tlv_deserialize(req_action_8, sizeof(req_action_8), &req));
+    ASSERT_EQ_INT(CFDP_FS_ACTION_DENY_DIRECTORY, req.action_code);
+
+    /* Responses: an empty file name LV and an empty message LV. */
+    const uint8_t resp_action_b[] = {CFDP_TLV_FILESTORE_RESPONSE, 0x03, 0xB0, 0x00, 0x00};
+    ASSERT_EQ_INT(
+        0,
+        cfdp_filestore_response_tlv_deserialize(resp_action_b, sizeof(resp_action_b), &resp));
+
+    const uint8_t resp_action_8[] = {CFDP_TLV_FILESTORE_RESPONSE, 0x03, 0x80, 0x00, 0x00};
+    ASSERT_EQ_INT(
+        5,
+        cfdp_filestore_response_tlv_deserialize(resp_action_8, sizeof(resp_action_8), &resp));
+    ASSERT_EQ_INT(CFDP_FS_ACTION_DENY_DIRECTORY, resp.action_code);
+    return 0;
+}
+
 static int test_filestore_tlv_value_too_long(void)
 {
     static char name[255];
@@ -571,6 +660,9 @@ test_result_t test_cfdp_tlv_run_all(void)
     RUN_TEST(test_filestore_response_invalid_args);
     RUN_TEST(test_filestore_response_malformed_value);
     RUN_TEST(test_filestore_tlv_value_too_long);
+    RUN_TEST(test_filestore_request_rejects_undefined_actions);
+    RUN_TEST(test_filestore_response_rejects_undefined_actions);
+    RUN_TEST(test_filestore_tlv_deserialize_rejects_undefined_actions);
 
     /* cunit.h keeps its tally in file-local statics, so these counters cover
      * only the tests run above. */

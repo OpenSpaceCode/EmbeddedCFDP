@@ -273,7 +273,8 @@ size_t cfdp_fault_handler_tlv_deserialize(const uint8_t *buf,
  *                     for the action codes that carry one.
  * @param[out] buf     Output buffer.
  * @param[in]  buf_len Buffer capacity in octets.
- * @return Bytes written, or 0 on error.
+ * @return Bytes written, or 0 on error (NULL args, buffer too small, an action
+ *         code outside table 5-16, or a value too long for the TLV).
  */
 size_t cfdp_filestore_request_tlv_serialize(const cfdp_filestore_request_t *req,
                                             uint8_t *buf,
@@ -285,7 +286,8 @@ size_t cfdp_filestore_request_tlv_serialize(const cfdp_filestore_request_t *req,
  * @param[in]  buf     Input buffer positioned at the type octet.
  * @param[in]  buf_len Octets available in @p buf.
  * @param[out] req     Decoded request; file names index into @p buf.
- * @return Bytes consumed, or 0 on error.
+ * @return Bytes consumed, or 0 on error (NULL args, truncated or mistyped TLV,
+ *         an action code outside table 5-16, or malformed file names).
  */
 size_t cfdp_filestore_request_tlv_deserialize(const uint8_t *buf,
                                               size_t buf_len,
@@ -298,7 +300,8 @@ size_t cfdp_filestore_request_tlv_deserialize(const uint8_t *buf,
  *                     for the action codes that carry one.
  * @param[out] buf     Output buffer.
  * @param[in]  buf_len Buffer capacity in octets.
- * @return Bytes written, or 0 on error.
+ * @return Bytes written, or 0 on error (NULL args, buffer too small, an action
+ *         code outside table 5-16, or a value too long for the TLV).
  */
 size_t cfdp_filestore_response_tlv_serialize(const cfdp_filestore_response_t *resp,
                                              uint8_t *buf,
@@ -310,7 +313,8 @@ size_t cfdp_filestore_response_tlv_serialize(const cfdp_filestore_response_t *re
  * @param[in]  buf     Input buffer positioned at the type octet.
  * @param[in]  buf_len Octets available in @p buf.
  * @param[out] resp    Decoded response; file names and message index into @p buf.
- * @return Bytes consumed, or 0 on error.
+ * @return Bytes consumed, or 0 on error (NULL args, truncated or mistyped TLV,
+ *         an action code outside table 5-16, or malformed names or message).
  */
 size_t cfdp_filestore_response_tlv_deserialize(const uint8_t *buf,
                                                size_t buf_len,
