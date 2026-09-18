@@ -637,6 +637,68 @@ static int test_filestore_tlv_value_too_long(void)
     return 0;
 }
 
+static int test_filestore_request_exact_bytes(void)
+{
+    /* Table 5-15: type 00; action Replace (0100) in the high nibble, spare
+     * low nibble = 0x40; first name LV "a"; second name LV "b" (present for
+     * Replace per table 5-16). Value length 5. */
+    const uint8_t expected[] = {0x00, 0x05, 0x40, 0x01, 'a', 0x01, 'b'};
+
+    cfdp_filestore_request_t req = {0};
+    req.action_code = CFDP_FS_ACTION_REPLACE_FILE;
+    req.first_filename = "a";
+    req.first_filename_len = 1;
+    req.second_filename = "b";
+    req.second_filename_len = 1;
+
+    uint8_t buf[16];
+    ASSERT_EQ_INT(sizeof(expected), cfdp_filestore_request_tlv_serialize(&req, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected, buf, sizeof(expected));
+
+    cfdp_filestore_request_t out = {0};
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_filestore_request_tlv_deserialize(expected, sizeof(expected), &out));
+    ASSERT_EQ_INT(CFDP_FS_ACTION_REPLACE_FILE, out.action_code);
+    ASSERT_EQ_INT(1, out.first_filename_len);
+    ASSERT_EQ_MEM("a", out.first_filename, 1);
+    ASSERT_EQ_INT(1, out.second_filename_len);
+    ASSERT_EQ_MEM("b", out.second_filename, 1);
+    return 0;
+}
+
+static int test_filestore_response_exact_bytes(void)
+{
+    /* Table 5-17: type 01; action Rename (0010) and status 'New File Name
+     * already exists' (0010) = 0x22; first name LV "a"; second name LV "b";
+     * filestore message LV "m". Value length 7. */
+    const uint8_t expected[] = {0x01, 0x07, 0x22, 0x01, 'a', 0x01, 'b', 0x01, 'm'};
+
+    cfdp_filestore_response_t resp = {0};
+    resp.action_code = CFDP_FS_ACTION_RENAME_FILE;
+    resp.status_code = CFDP_FS_STATUS_ERROR_2;
+    resp.first_filename = "a";
+    resp.first_filename_len = 1;
+    resp.second_filename = "b";
+    resp.second_filename_len = 1;
+    resp.message = "m";
+    resp.message_len = 1;
+
+    uint8_t buf[16];
+    ASSERT_EQ_INT(sizeof(expected), cfdp_filestore_response_tlv_serialize(&resp, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected, buf, sizeof(expected));
+
+    cfdp_filestore_response_t out = {0};
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_filestore_response_tlv_deserialize(expected, sizeof(expected), &out));
+    ASSERT_EQ_INT(CFDP_FS_ACTION_RENAME_FILE, out.action_code);
+    ASSERT_EQ_INT(CFDP_FS_STATUS_ERROR_2, out.status_code);
+    ASSERT_EQ_MEM("a", out.first_filename, 1);
+    ASSERT_EQ_MEM("b", out.second_filename, 1);
+    ASSERT_EQ_INT(1, out.message_len);
+    ASSERT_EQ_MEM("m", out.message, 1);
+    return 0;
+}
+
 test_result_t test_cfdp_tlv_run_all(void)
 {
     RUN_TEST(test_lv_roundtrip);
@@ -663,6 +725,8 @@ test_result_t test_cfdp_tlv_run_all(void)
     RUN_TEST(test_filestore_request_rejects_undefined_actions);
     RUN_TEST(test_filestore_response_rejects_undefined_actions);
     RUN_TEST(test_filestore_tlv_deserialize_rejects_undefined_actions);
+    RUN_TEST(test_filestore_request_exact_bytes);
+    RUN_TEST(test_filestore_response_exact_bytes);
 
     /* cunit.h keeps its tally in file-local statics, so these counters cover
      * only the tests run above. */

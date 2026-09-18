@@ -817,6 +817,286 @@ static int test_keep_alive_invalid_args(void)
     return 0;
 }
 
+/* -------------------------------------------------------------------------
+ * Golden-byte vectors, derived by hand from the tables of §5.2. Each test
+ * serialises and compares octets, then decodes the literal vector, so both
+ * codecs are pinned to the standard rather than merely to each other.
+ * ---------------------------------------------------------------------- */
+
+static int test_eof_exact_bytes_small_file(void)
+{
+    /* Table 5-6: code 04; condition 'File size error' (0110) in the high
+     * nibble, spare low nibble; 32-bit checksum; 32-bit file size; fault
+     * location as an Entity ID TLV (06, length 2, ID 0x0C0D). */
+    const uint8_t expected[] =
+        {0x04, 0x60, 0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x0A, 0x0B, 0x06, 0x02, 0x0C, 0x0D};
+
+    cfdp_eof_pdu_t eof = {0};
+    eof.condition_code = CFDP_COND_FILE_SIZE_ERROR;
+    eof.file_checksum = 0x12345678U;
+    eof.file_size = 0x0A0B;
+    eof.fault_location_entity_id = 0x0C0D;
+    eof.fault_location_len = 2;
+
+    uint8_t buf[32];
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_eof_serialize(&eof, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected, buf, sizeof(expected));
+
+    cfdp_eof_pdu_t out = {0};
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_eof_deserialize(expected, sizeof(expected), CFDP_FILE_SIZE_SMALL, &out));
+    ASSERT_EQ_INT(CFDP_COND_FILE_SIZE_ERROR, out.condition_code);
+    ASSERT_TRUE(out.file_checksum == 0x12345678U);
+    ASSERT_TRUE(out.file_size == 0x0A0B);
+    ASSERT_TRUE(out.fault_location_entity_id == 0x0C0D);
+    ASSERT_EQ_INT(2, out.fault_location_len);
+    return 0;
+}
+
+static int test_eof_exact_bytes_large_file(void)
+{
+    /* Table 5-6 with the Large File flag: the file size is 64 bits; 'No error'
+     * omits the fault location. */
+    const uint8_t expected[] =
+        {0x04, 0x00, 0x89, 0xAB, 0xCD, 0xEF, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02};
+
+    cfdp_eof_pdu_t eof = {0};
+    eof.condition_code = CFDP_COND_NO_ERROR;
+    eof.file_checksum = 0x89ABCDEFU;
+    eof.file_size = 0x0000000100000002ULL;
+
+    uint8_t buf[32];
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_eof_serialize(&eof, CFDP_FILE_SIZE_LARGE, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected, buf, sizeof(expected));
+
+    cfdp_eof_pdu_t out = {0};
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_eof_deserialize(expected, sizeof(expected), CFDP_FILE_SIZE_LARGE, &out));
+    ASSERT_EQ_INT(CFDP_COND_NO_ERROR, out.condition_code);
+    ASSERT_TRUE(out.file_checksum == 0x89ABCDEFU);
+    ASSERT_TRUE(out.file_size == 0x0000000100000002ULL);
+    ASSERT_EQ_INT(0, out.fault_location_len);
+    return 0;
+}
+
+static int test_finished_exact_bytes(void)
+{
+    /* Table 5-7: code 05; then condition 'Filestore rejection' (0100), spare
+     * (0), delivery 'Data incomplete' (1), file status 'discarded due to
+     * filestore rejection' (01) = 0100 0 1 01 = 0x45; one Filestore Response
+     * TLV (table 5-17: Create File / 'Create not allowed' = 0x01, name "f",
+     * empty message); fault location Entity ID TLV with 1-octet ID 7. */
+    const uint8_t responses[] = {0x01, 0x04, 0x01, 0x01, 'f', 0x00};
+    const uint8_t expected[] = {0x05, 0x45, 0x01, 0x04, 0x01, 0x01, 'f', 0x00, 0x06, 0x01, 0x07};
+
+    cfdp_finished_pdu_t fin = {0};
+    fin.condition_code = CFDP_COND_FILESTORE_REJECTION;
+    fin.delivery_code = CFDP_DELIVERY_INCOMPLETE;
+    fin.file_status = CFDP_FILE_STATUS_DISCARDED_FILESTORE_REJECTION;
+    fin.filestore_responses = responses;
+    fin.filestore_responses_len = sizeof(responses);
+    fin.fault_location_entity_id = 7;
+    fin.fault_location_len = 1;
+
+    uint8_t buf[32];
+    ASSERT_EQ_INT(sizeof(expected), cfdp_finished_serialize(&fin, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected, buf, sizeof(expected));
+
+    cfdp_finished_pdu_t out = {0};
+    ASSERT_EQ_INT(sizeof(expected), cfdp_finished_deserialize(expected, sizeof(expected), &out));
+    ASSERT_EQ_INT(CFDP_COND_FILESTORE_REJECTION, out.condition_code);
+    ASSERT_EQ_INT(CFDP_DELIVERY_INCOMPLETE, out.delivery_code);
+    ASSERT_EQ_INT(CFDP_FILE_STATUS_DISCARDED_FILESTORE_REJECTION, out.file_status);
+    ASSERT_EQ_INT(sizeof(responses), out.filestore_responses_len);
+    ASSERT_EQ_MEM(responses, out.filestore_responses, sizeof(responses));
+    ASSERT_TRUE(out.fault_location_entity_id == 7);
+    ASSERT_EQ_INT(1, out.fault_location_len);
+    return 0;
+}
+
+static int test_metadata_exact_bytes_small_file(void)
+{
+    /* Table 5-9: code 07; reserved (0), closure requested (1), reserved (00),
+     * checksum type null (1111) = 0 1 00 1111 = 0x4F; 32-bit size 256; source
+     * name LV "a"; destination name LV "bc"; a Flow Label option TLV. */
+    const uint8_t options[] = {0x05, 0x01, 0xFF};
+    const uint8_t expected[] =
+        {0x07, 0x4F, 0x00, 0x00, 0x01, 0x00, 0x01, 'a', 0x02, 'b', 'c', 0x05, 0x01, 0xFF};
+
+    cfdp_metadata_pdu_t md = {0};
+    md.closure_requested = true;
+    md.checksum_type = CFDP_CHECKSUM_NULL;
+    md.file_size = 256;
+    md.source_filename = "a";
+    md.source_filename_len = 1;
+    md.destination_filename = "bc";
+    md.destination_filename_len = 2;
+    md.options = options;
+    md.options_len = sizeof(options);
+
+    uint8_t buf[32];
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_metadata_serialize(&md, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected, buf, sizeof(expected));
+
+    cfdp_metadata_pdu_t out = {0};
+    ASSERT_EQ_INT(
+        sizeof(expected),
+        cfdp_metadata_deserialize(expected, sizeof(expected), CFDP_FILE_SIZE_SMALL, &out));
+    ASSERT_TRUE(out.closure_requested);
+    ASSERT_EQ_INT(CFDP_CHECKSUM_NULL, out.checksum_type);
+    ASSERT_TRUE(out.file_size == 256);
+    ASSERT_EQ_INT(1, out.source_filename_len);
+    ASSERT_EQ_MEM("a", out.source_filename, 1);
+    ASSERT_EQ_INT(2, out.destination_filename_len);
+    ASSERT_EQ_MEM("bc", out.destination_filename, 2);
+    ASSERT_EQ_INT(sizeof(options), out.options_len);
+    ASSERT_EQ_MEM(options, out.options, sizeof(options));
+    return 0;
+}
+
+static int test_metadata_exact_bytes_large_file(void)
+{
+    /* Table 5-9 with the Large File flag: closure not requested, modular
+     * checksum (0x00), 64-bit size 512, both name LVs empty, no options. */
+    const uint8_t expected[] =
+        {0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00};
+
+    cfdp_metadata_pdu_t md = {0};
+    md.checksum_type = CFDP_CHECKSUM_MODULAR;
+    md.file_size = 512;
+
+    uint8_t buf[32];
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_metadata_serialize(&md, CFDP_FILE_SIZE_LARGE, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected, buf, sizeof(expected));
+
+    cfdp_metadata_pdu_t out = {0};
+    ASSERT_EQ_INT(
+        sizeof(expected),
+        cfdp_metadata_deserialize(expected, sizeof(expected), CFDP_FILE_SIZE_LARGE, &out));
+    ASSERT_TRUE(!out.closure_requested);
+    ASSERT_EQ_INT(CFDP_CHECKSUM_MODULAR, out.checksum_type);
+    ASSERT_TRUE(out.file_size == 512);
+    ASSERT_EQ_INT(0, out.source_filename_len);
+    ASSERT_EQ_INT(0, out.destination_filename_len);
+    ASSERT_EQ_INT(0, out.options_len);
+    return 0;
+}
+
+static int test_nak_exact_bytes_small_file(void)
+{
+    /* Tables 5-10 and 5-11: code 08; 32-bit start and end of scope; then
+     * (start, end) offset pairs. The second pair is the all-zero request for
+     * the Metadata PDU. */
+    const uint8_t expected[] = {0x08, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x02, 0x00,
+                                0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x30, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    cfdp_nak_pdu_t nak = {0};
+    nak.start_of_scope = 0x10;
+    nak.end_of_scope = 0x200;
+    nak.segment_request_count = 2;
+    nak.segment_requests[0].start_offset = 0x20;
+    nak.segment_requests[0].end_offset = 0x30;
+
+    uint8_t buf[64];
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_nak_serialize(&nak, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected, buf, sizeof(expected));
+
+    cfdp_nak_pdu_t out = {0};
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_nak_deserialize(expected, sizeof(expected), CFDP_FILE_SIZE_SMALL, &out));
+    ASSERT_TRUE(out.start_of_scope == 0x10);
+    ASSERT_TRUE(out.end_of_scope == 0x200);
+    ASSERT_EQ_INT(2, out.segment_request_count);
+    ASSERT_TRUE(out.segment_requests[0].start_offset == 0x20);
+    ASSERT_TRUE(out.segment_requests[0].end_offset == 0x30);
+    ASSERT_TRUE(out.segment_requests[1].start_offset == 0);
+    ASSERT_TRUE(out.segment_requests[1].end_offset == 0);
+    return 0;
+}
+
+static int test_nak_exact_bytes_large_file(void)
+{
+    /* Tables 5-10 and 5-11 with the Large File flag: every offset is 64 bits,
+     * so one segment request is 16 octets, not the 8 of table 5-10's small-file
+     * figure. */
+    const uint8_t expected[] = {0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x10};
+
+    cfdp_nak_pdu_t nak = {0};
+    nak.start_of_scope = 1;
+    nak.end_of_scope = 2;
+    nak.segment_request_count = 1;
+    nak.segment_requests[0].start_offset = 0x0000000100000000ULL;
+    nak.segment_requests[0].end_offset = 0x0000000100000010ULL;
+
+    uint8_t buf[64];
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_nak_serialize(&nak, CFDP_FILE_SIZE_LARGE, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected, buf, sizeof(expected));
+
+    cfdp_nak_pdu_t out = {0};
+    ASSERT_EQ_INT(sizeof(expected),
+                  cfdp_nak_deserialize(expected, sizeof(expected), CFDP_FILE_SIZE_LARGE, &out));
+    ASSERT_TRUE(out.start_of_scope == 1);
+    ASSERT_TRUE(out.end_of_scope == 2);
+    ASSERT_EQ_INT(1, out.segment_request_count);
+    ASSERT_TRUE(out.segment_requests[0].start_offset == 0x0000000100000000ULL);
+    ASSERT_TRUE(out.segment_requests[0].end_offset == 0x0000000100000010ULL);
+    return 0;
+}
+
+static int test_prompt_exact_bytes(void)
+{
+    /* Table 5-12: code 09; response required in the top bit, 7 spare bits. */
+    const uint8_t expected_nak[] = {0x09, 0x00};
+    const uint8_t expected_keep_alive[] = {0x09, 0x80};
+
+    uint8_t buf[4];
+    ASSERT_EQ_INT(2, cfdp_prompt_serialize(CFDP_PROMPT_NAK, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected_nak, buf, 2);
+    ASSERT_EQ_INT(2, cfdp_prompt_serialize(CFDP_PROMPT_KEEP_ALIVE, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected_keep_alive, buf, 2);
+
+    cfdp_prompt_response_t response = CFDP_PROMPT_NAK;
+    ASSERT_EQ_INT(2, cfdp_prompt_deserialize(expected_keep_alive, 2, &response));
+    ASSERT_EQ_INT(CFDP_PROMPT_KEEP_ALIVE, response);
+    ASSERT_EQ_INT(2, cfdp_prompt_deserialize(expected_nak, 2, &response));
+    ASSERT_EQ_INT(CFDP_PROMPT_NAK, response);
+    return 0;
+}
+
+static int test_keep_alive_exact_bytes(void)
+{
+    /* Table 5-13: code 0C; progress as a big-endian FSS offset. */
+    const uint8_t expected_small[] = {0x0C, 0x01, 0x02, 0x03, 0x04};
+    const uint8_t expected_large[] = {0x0C, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+
+    uint8_t buf[16];
+    ASSERT_EQ_INT(5,
+                  cfdp_keep_alive_serialize(0x01020304ULL, CFDP_FILE_SIZE_SMALL, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected_small, buf, sizeof(expected_small));
+    ASSERT_EQ_INT(
+        9,
+        cfdp_keep_alive_serialize(0x0102030405060708ULL, CFDP_FILE_SIZE_LARGE, buf, sizeof(buf)));
+    ASSERT_EQ_MEM(expected_large, buf, sizeof(expected_large));
+
+    uint64_t progress = 0;
+    ASSERT_EQ_INT(5,
+                  cfdp_keep_alive_deserialize(expected_small, 5, CFDP_FILE_SIZE_SMALL, &progress));
+    ASSERT_TRUE(progress == 0x01020304ULL);
+    ASSERT_EQ_INT(9,
+                  cfdp_keep_alive_deserialize(expected_large, 9, CFDP_FILE_SIZE_LARGE, &progress));
+    ASSERT_TRUE(progress == 0x0102030405060708ULL);
+    return 0;
+}
+
 test_result_t test_cfdp_directive_run_all(void)
 {
     RUN_TEST(test_eof_roundtrip);
@@ -855,6 +1135,15 @@ test_result_t test_cfdp_directive_run_all(void)
     RUN_TEST(test_prompt_nak_roundtrip);
     RUN_TEST(test_prompt_invalid_args);
     RUN_TEST(test_keep_alive_invalid_args);
+    RUN_TEST(test_eof_exact_bytes_small_file);
+    RUN_TEST(test_eof_exact_bytes_large_file);
+    RUN_TEST(test_finished_exact_bytes);
+    RUN_TEST(test_metadata_exact_bytes_small_file);
+    RUN_TEST(test_metadata_exact_bytes_large_file);
+    RUN_TEST(test_nak_exact_bytes_small_file);
+    RUN_TEST(test_nak_exact_bytes_large_file);
+    RUN_TEST(test_prompt_exact_bytes);
+    RUN_TEST(test_keep_alive_exact_bytes);
 
     /* cunit.h keeps its tally in file-local statics, so these counters cover
      * only the tests run above. */

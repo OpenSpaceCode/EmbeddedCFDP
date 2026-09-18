@@ -732,6 +732,48 @@ static int test_pdu_crc_end_to_end_file_data(void)
     return 0;
 }
 
+static int test_file_data_exact_bytes_no_segment_metadata(void)
+{
+    /* Table 5-14 with the segment metadata flag clear: the data field is the
+     * FSS offset followed by the file data, nothing else. */
+    const uint8_t payload[] = {'x', 'y'};
+    const uint8_t expected_small[] = {0x00, 0x00, 0x10, 0x00, 'x', 'y'};
+    const uint8_t expected_large[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 'x', 'y'};
+
+    cfdp_file_data_pdu_t fd = {0};
+    fd.offset = 0x1000;
+    fd.file_data = payload;
+    fd.file_data_len = sizeof(payload);
+
+    uint8_t buf[16];
+    ASSERT_EQ_INT(sizeof(expected_small),
+                  cfdp_file_data_serialize(&fd,
+                                           CFDP_FILE_SIZE_SMALL,
+                                           CFDP_SEG_METADATA_ABSENT,
+                                           buf,
+                                           sizeof(buf)));
+    ASSERT_EQ_MEM(expected_small, buf, sizeof(expected_small));
+    ASSERT_EQ_INT(sizeof(expected_large),
+                  cfdp_file_data_serialize(&fd,
+                                           CFDP_FILE_SIZE_LARGE,
+                                           CFDP_SEG_METADATA_ABSENT,
+                                           buf,
+                                           sizeof(buf)));
+    ASSERT_EQ_MEM(expected_large, buf, sizeof(expected_large));
+
+    cfdp_file_data_pdu_t out;
+    ASSERT_EQ_INT(sizeof(expected_large),
+                  cfdp_file_data_deserialize(expected_large,
+                                             sizeof(expected_large),
+                                             CFDP_FILE_SIZE_LARGE,
+                                             CFDP_SEG_METADATA_ABSENT,
+                                             &out));
+    ASSERT_TRUE(out.offset == 0x1000);
+    ASSERT_EQ_INT(2, out.file_data_len);
+    ASSERT_EQ_MEM(payload, out.file_data, 2);
+    return 0;
+}
+
 test_result_t test_cfdp_pdu_run_all(void)
 {
     RUN_TEST(test_header_exact_bytes);
@@ -750,6 +792,7 @@ test_result_t test_cfdp_pdu_run_all(void)
     RUN_TEST(test_header_directive_segment_flags_ignored_on_decode);
     RUN_TEST(test_file_data_serialize_invalid_args);
     RUN_TEST(test_file_data_deserialize_invalid_args);
+    RUN_TEST(test_file_data_exact_bytes_no_segment_metadata);
     RUN_TEST(test_file_data_segment_metadata_exact_bytes);
     RUN_TEST(test_file_data_segment_metadata_roundtrip);
     RUN_TEST(test_file_data_segment_metadata_absent_fields_cleared);
