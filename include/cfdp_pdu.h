@@ -127,6 +127,41 @@ size_t cfdp_pdu_header_deserialize(const uint8_t *buf, size_t buf_len, cfdp_pdu_
 size_t cfdp_pdu_payload_size(const cfdp_pdu_header_t *hdr);
 
 /**
+ * @brief Append the CRC to an assembled PDU (§4.1.1, §4.1.3.2).
+ *
+ * @p buf holds the serialised header followed by the payload. The header must
+ * already have been serialised with the CRC flag set and a data field length
+ * that counts the CRC, i.e. payload length plus ::CFDP_PDU_CRC_LEN; the CRC is
+ * computed from the first header octet to the last payload octet and written
+ * big-endian after the payload.
+ *
+ * @param[in,out] buf     Buffer holding the PDU without its CRC.
+ * @param[in]     pdu_len Octets of header plus payload in @p buf.
+ * @param[in]     buf_len Capacity of @p buf; needs @p pdu_len + 2.
+ * @return The complete PDU length, @p pdu_len + ::CFDP_PDU_CRC_LEN, or 0 on
+ *         error (NULL buffer, undecodable header, CRC flag absent, a data field
+ *         length that does not count the CRC, or no room for it).
+ */
+size_t cfdp_pdu_crc_append(uint8_t *buf, size_t pdu_len, size_t buf_len);
+
+/**
+ * @brief Check a received PDU's CRC (§4.1.2).
+ *
+ * Implements the receiving entity's rule: a PDU whose CRC flag is set is
+ * accepted only if the CRC in its final two data field octets matches the
+ * CRC of everything before it; a PDU whose CRC flag is clear is accepted as
+ * is. Octets beyond the PDU length the header describes are ignored, so a
+ * padded link frame can be passed directly.
+ *
+ * @param[in] buf     Received octets, positioned at the PDU header.
+ * @param[in] buf_len Octets available in @p buf.
+ * @return true if the PDU may be processed further; false if it must be
+ *         discarded (CRC mismatch, undecodable header, or fewer octets than
+ *         the header announces).
+ */
+bool cfdp_pdu_crc_verify(const uint8_t *buf, size_t buf_len);
+
+/**
  * @brief Serialise a File Data PDU payload (§5.3, table 5-14).
  *
  * Writes the data field only; serialise the fixed header separately. When

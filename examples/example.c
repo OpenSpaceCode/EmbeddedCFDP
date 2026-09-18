@@ -3,8 +3,9 @@
  * @brief   Worked example: build and parse a minimal CFDP file transfer
  *
  * Assembles the three PDUs of a tiny unacknowledged-mode transfer — Metadata,
- * File Data and EOF — for an in-memory "file", prints each PDU as hex, then
- * parses them back and verifies the file checksum.
+ * File Data and EOF — for an in-memory "file", each protected by the PDU CRC,
+ * prints each PDU as hex, then checks the CRC, parses the File Data PDU back
+ * and verifies the file checksum.
  * Demonstrates CCSDS 727.0-B-5 (CCSDS File Delivery Protocol).
  *
  * OpenSpaceCode — https://github.com/OpenSpaceCode
@@ -33,7 +34,7 @@ static void fill_common_header(cfdp_pdu_header_t *hdr, cfdp_pdu_type_t type)
     hdr->pdu_type = type;
     hdr->direction = CFDP_DIRECTION_TOWARD_RECEIVER;
     hdr->transmission_mode = CFDP_TRANS_MODE_UNACKNOWLEDGED;
-    hdr->crc_flag = CFDP_CRC_ABSENT;
+    hdr->crc_flag = CFDP_CRC_PRESENT;
     hdr->large_file_flag = CFDP_FILE_SIZE_SMALL;
     hdr->segmentation_control = CFDP_SEG_CTRL_BOUNDARIES_NOT_PRESERVED;
     hdr->segment_metadata_flag = CFDP_SEG_METADATA_ABSENT;
@@ -52,7 +53,10 @@ static size_t emit_pdu(const char *label,
                        size_t out_len)
 {
     size_t hlen = cfdp_pdu_header_size(hdr);
-    hdr->data_field_length = (uint16_t)payload_len;
+
+    /* §4.1.3.2: the CRC sits in the final octets of the data field and its
+     * length is counted in the data field length. */
+    hdr->data_field_length = (uint16_t)(payload_len + CFDP_PDU_CRC_LEN);
     if ((cfdp_pdu_header_serialize(hdr, out, out_len) == 0) || (out_len < hlen + payload_len))
     {
         return 0;
@@ -61,8 +65,15 @@ static size_t emit_pdu(const char *label,
     {
         out[hlen + i] = payload[i];
     }
-    print_hex(label, out, hlen + payload_len);
-    return hlen + payload_len;
+
+    /* Computed over the header and payload just written, then appended. */
+    size_t total = cfdp_pdu_crc_append(out, hlen + payload_len, out_len);
+    if (total == 0)
+    {
+        return 0;
+    }
+    print_hex(label, out, total);
+    return total;
 }
 
 static void build_metadata(uint8_t *out, size_t out_len)
@@ -120,6 +131,14 @@ static void build_eof(uint8_t *out, size_t out_len)
 
 static void parse_and_verify(const uint8_t *pdu, size_t pdu_len)
 {
+    /* §4.1.2: a PDU whose CRC does not check out is discarded before any of
+     * its contents are looked at. */
+    if (!cfdp_pdu_crc_verify(pdu, pdu_len))
+    {
+        printf("\nReceiver discarded the PDU: CRC check failed\n");
+        return;
+    }
+
     cfdp_pdu_header_t hdr;
     size_t hlen = cfdp_pdu_header_deserialize(pdu, pdu_len, &hdr);
 

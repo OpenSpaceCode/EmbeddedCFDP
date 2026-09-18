@@ -38,6 +38,11 @@ int main(void)
     total_passed += r.passed;
     total_tests += r.total;
 
+    r = test_cfdp_crc_run_all();
+    REPORT("cfdp_crc", r);
+    total_passed += r.passed;
+    total_tests += r.total;
+
     printf("  ------------------------------\n");
     printf("  %-18s Passed %d/%d\n", "All UT:", total_passed, total_tests);
 

@@ -24,5 +24,6 @@ test_result_t test_cfdp_pdu_run_all(void);
 test_result_t test_cfdp_directive_run_all(void);
 test_result_t test_cfdp_tlv_run_all(void);
 test_result_t test_cfdp_checksum_run_all(void);
+test_result_t test_cfdp_crc_run_all(void);
 
 #endif /* TEST_RUNNERS_H */

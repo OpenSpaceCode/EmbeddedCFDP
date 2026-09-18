@@ -586,6 +586,152 @@ static int test_file_data_crc_octets_not_file_data(void)
     return 0;
 }
 
+/**
+ * @brief Assemble a File Data PDU with the CRC flag set, ready for the CRC.
+ *
+ * @param[out] buf     Buffer receiving header plus payload.
+ * @param[in]  buf_len Capacity of @p buf.
+ * @return Octets written (header plus payload, no CRC yet), or 0 on error.
+ */
+static size_t build_crc_flagged_pdu(uint8_t *buf, size_t buf_len)
+{
+    static const uint8_t payload[] = {0x00, 0x00, 0x00, 0x00, 'A', 'B', 'C'};
+
+    cfdp_pdu_header_t hdr;
+    fill_header(&hdr);
+    hdr.pdu_type = CFDP_PDU_TYPE_FILE_DATA;
+    hdr.crc_flag = CFDP_CRC_PRESENT;
+    hdr.data_field_length = (uint16_t)(sizeof(payload) + CFDP_PDU_CRC_LEN);
+
+    size_t hlen = cfdp_pdu_header_serialize(&hdr, buf, buf_len);
+    if ((hlen == 0) || (buf_len < hlen + sizeof(payload)))
+    {
+        return 0;
+    }
+    memcpy(&buf[hlen], payload, sizeof(payload));
+    return hlen + sizeof(payload);
+}
+
+static int test_pdu_crc_append_and_verify(void)
+{
+    uint8_t buf[32];
+    size_t pdu_len = build_crc_flagged_pdu(buf, sizeof(buf));
+    ASSERT_TRUE(pdu_len > 0);
+
+    size_t total = cfdp_pdu_crc_append(buf, pdu_len, sizeof(buf));
+    ASSERT_EQ_INT(pdu_len + CFDP_PDU_CRC_LEN, total);
+
+    /* §4.1.3.2: computed from the first header octet to the last payload
+     * octet, and placed big-endian in the final two data field octets. */
+    uint16_t crc = cfdp_crc_compute(buf, pdu_len);
+    ASSERT_EQ_INT((uint8_t)(crc >> 8), buf[pdu_len]);
+    ASSERT_EQ_INT((uint8_t)(crc & 0xFFU), buf[pdu_len + 1]);
+
+    ASSERT_TRUE(cfdp_pdu_crc_verify(buf, total));
+
+    /* Trailing link-layer padding beyond the PDU is ignored. */
+    ASSERT_TRUE(cfdp_pdu_crc_verify(buf, sizeof(buf)));
+    return 0;
+}
+
+static int test_pdu_crc_verify_detects_corruption(void)
+{
+    uint8_t buf[32];
+    size_t pdu_len = build_crc_flagged_pdu(buf, sizeof(buf));
+    size_t total = cfdp_pdu_crc_append(buf, pdu_len, sizeof(buf));
+    ASSERT_TRUE(total > 0);
+
+    /* A flipped bit in the header, in the payload, and in the CRC itself. */
+    const size_t corrupt_at[] = {2, pdu_len - 1, total - 1};
+    for (size_t i = 0; i < sizeof(corrupt_at) / sizeof(corrupt_at[0]); i++)
+    {
+        buf[corrupt_at[i]] ^= 0x01;
+        ASSERT_TRUE(!cfdp_pdu_crc_verify(buf, total));
+        buf[corrupt_at[i]] ^= 0x01;
+    }
+    ASSERT_TRUE(cfdp_pdu_crc_verify(buf, total));
+
+    /* Fewer octets than the header announces cannot be verified. */
+    ASSERT_TRUE(!cfdp_pdu_crc_verify(buf, total - 1));
+    return 0;
+}
+
+static int test_pdu_crc_verify_without_crc(void)
+{
+    /* §4.1.2 applies only when the CRC flag is set: a PDU without one passes. */
+    const uint8_t plain[] = {0x20, 0x00, 0x03, 0x00, 0x01, 0x02, 0x03, 0x04, 0x00, 0x05};
+    ASSERT_TRUE(cfdp_pdu_crc_verify(plain, sizeof(plain)));
+
+    /* An undecodable header (version '000') is discarded regardless. */
+    const uint8_t bad_version[] = {0x00, 0x00, 0x03, 0x00, 0x01, 0x02, 0x03, 0x04, 0x00, 0x05};
+    ASSERT_TRUE(!cfdp_pdu_crc_verify(bad_version, sizeof(bad_version)));
+
+    /* CRC flag set but a data field too short to hold a CRC. */
+    const uint8_t no_room[] = {0x22, 0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x04};
+    ASSERT_TRUE(!cfdp_pdu_crc_verify(no_room, sizeof(no_room)));
+
+    ASSERT_TRUE(!cfdp_pdu_crc_verify(NULL, sizeof(plain)));
+    return 0;
+}
+
+static int test_pdu_crc_append_rejects_inconsistent_header(void)
+{
+    uint8_t buf[32];
+    size_t pdu_len = build_crc_flagged_pdu(buf, sizeof(buf));
+    ASSERT_TRUE(pdu_len > 0);
+
+    ASSERT_EQ_INT(0, cfdp_pdu_crc_append(NULL, pdu_len, sizeof(buf)));
+
+    /* No room for the two CRC octets. */
+    ASSERT_EQ_INT(0, cfdp_pdu_crc_append(buf, pdu_len, pdu_len + 1));
+
+    /* Data field length sized for the payload alone: the header would then
+     * describe a PDU two octets shorter than the one being built. */
+    uint8_t short_len[32];
+    memcpy(short_len, buf, sizeof(buf));
+    short_len[2] = (uint8_t)(short_len[2] - CFDP_PDU_CRC_LEN);
+    ASSERT_EQ_INT(0, cfdp_pdu_crc_append(short_len, pdu_len, sizeof(short_len)));
+
+    /* CRC flag clear: there is nowhere the standard puts a CRC. */
+    uint8_t no_flag[32];
+    memcpy(no_flag, buf, sizeof(buf));
+    no_flag[0] = (uint8_t)(no_flag[0] & ~0x02U);
+    ASSERT_EQ_INT(0, cfdp_pdu_crc_append(no_flag, pdu_len, sizeof(no_flag)));
+
+    /* Fewer octets than a header needs. */
+    ASSERT_EQ_INT(0, cfdp_pdu_crc_append(buf, 3, sizeof(buf)));
+    return 0;
+}
+
+static int test_pdu_crc_end_to_end_file_data(void)
+{
+    /* Sender: header with CRC, payload, CRC. Receiver: verify, then decode
+     * only the payload, so the CRC octets never reach the file. */
+    uint8_t buf[32];
+    size_t pdu_len = build_crc_flagged_pdu(buf, sizeof(buf));
+    size_t total = cfdp_pdu_crc_append(buf, pdu_len, sizeof(buf));
+    ASSERT_TRUE(total > 0);
+    ASSERT_TRUE(cfdp_pdu_crc_verify(buf, total));
+
+    cfdp_pdu_header_t hdr;
+    size_t hlen = cfdp_pdu_header_deserialize(buf, total, &hdr);
+    ASSERT_TRUE(hlen > 0);
+    ASSERT_EQ_INT(CFDP_CRC_PRESENT, hdr.crc_flag);
+
+    cfdp_file_data_pdu_t fd;
+    size_t payload_len = cfdp_pdu_payload_size(&hdr);
+    ASSERT_EQ_INT(7, payload_len);
+    ASSERT_EQ_INT(payload_len,
+                  cfdp_file_data_deserialize(&buf[hlen],
+                                             payload_len,
+                                             hdr.large_file_flag,
+                                             hdr.segment_metadata_flag,
+                                             &fd));
+    ASSERT_EQ_INT(3, fd.file_data_len);
+    ASSERT_EQ_MEM("ABC", fd.file_data, 3);
+    return 0;
+}
+
 test_result_t test_cfdp_pdu_run_all(void)
 {
     RUN_TEST(test_header_exact_bytes);
@@ -611,6 +757,11 @@ test_result_t test_cfdp_pdu_run_all(void)
     RUN_TEST(test_file_data_segment_metadata_truncated);
     RUN_TEST(test_pdu_payload_size_excludes_crc);
     RUN_TEST(test_file_data_crc_octets_not_file_data);
+    RUN_TEST(test_pdu_crc_append_and_verify);
+    RUN_TEST(test_pdu_crc_verify_detects_corruption);
+    RUN_TEST(test_pdu_crc_verify_without_crc);
+    RUN_TEST(test_pdu_crc_append_rejects_inconsistent_header);
+    RUN_TEST(test_pdu_crc_end_to_end_file_data);
 
     /* cunit.h keeps its tally in file-local statics, so these counters cover
      * only the tests run above. */

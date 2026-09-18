@@ -11,6 +11,7 @@
 
 #include "cfdp_pdu.h"
 
+#include "cfdp_crc.h"
 #include "cfdp_endian.h"
 
 #include <string.h>
@@ -181,6 +182,64 @@ size_t cfdp_pdu_payload_size(const cfdp_pdu_header_t *hdr)
     }
 
     return (size_t)hdr->data_field_length - CFDP_PDU_CRC_LEN;
+}
+
+size_t cfdp_pdu_crc_append(uint8_t *buf, size_t pdu_len, size_t buf_len)
+{
+    cfdp_pdu_header_t hdr;
+    if ((!buf) || (cfdp_pdu_header_deserialize(buf, pdu_len, &hdr) == 0) ||
+        (hdr.crc_flag != CFDP_CRC_PRESENT) || (buf_len < pdu_len + CFDP_PDU_CRC_LEN))
+    {
+        return 0;
+    }
+
+    /* §4.1.3.2: the data field length counts the CRC, so the header must
+     * describe a PDU exactly one CRC longer than what has been written so far.
+     * Anything else means the caller sized the header for the payload alone. */
+    size_t described = cfdp_pdu_header_size(&hdr) + hdr.data_field_length;
+    if (described != pdu_len + CFDP_PDU_CRC_LEN)
+    {
+        return 0;
+    }
+
+    cfdp_write_uint(&buf[pdu_len], cfdp_crc_compute(buf, pdu_len), CFDP_PDU_CRC_LEN);
+
+    return pdu_len + CFDP_PDU_CRC_LEN;
+}
+
+bool cfdp_pdu_crc_verify(const uint8_t *buf, size_t buf_len)
+{
+    cfdp_pdu_header_t hdr;
+    size_t hsize = cfdp_pdu_header_deserialize(buf, buf_len, &hdr);
+    if (hsize == 0)
+    {
+        return false;
+    }
+
+    size_t total = hsize + hdr.data_field_length;
+    if (buf_len < total)
+    {
+        return false;
+    }
+
+    /* §4.1.2 applies only when the CRC flag is set. */
+    if (hdr.crc_flag != CFDP_CRC_PRESENT)
+    {
+        return true;
+    }
+
+    /* §4.1.3.2: the CRC occupies the final octets of the data field and is
+     * computed over everything before it. */
+    if (hdr.data_field_length < CFDP_PDU_CRC_LEN)
+    {
+        return false;
+    }
+    size_t protected_len = total - CFDP_PDU_CRC_LEN;
+
+    uint16_t expected = cfdp_crc_compute(buf, protected_len);
+    uint16_t received = (uint16_t)cfdp_read_uint(&buf[protected_len], CFDP_PDU_CRC_LEN);
+
+    return expected == received;
 }
 
 /**

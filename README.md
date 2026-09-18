@@ -34,15 +34,13 @@ retransmission and filestore are out of scope. See
 - **File checksums** (§4.2) — the mandatory modular (type 0) and null (type 15)
   algorithms, streaming and segment-order independent, selectable by the
   checksum type carried in the Metadata PDU.
-- **CRC length accounting** (§4.1.3.2) — `cfdp_pdu_payload_size()` returns the
-  payload length with any trailing CRC excluded, so the CRC octets are never
-  decoded as file data or as part of a TLV chain.
+- **PDU CRC** (§4.1) — the CCSDS TC CRC-16 (CCSDS 232.0-B-3 §4.2.1.3),
+  appended by `cfdp_pdu_crc_append()` and checked by `cfdp_pdu_crc_verify()`;
+  `cfdp_pdu_payload_size()` excludes the trailer from the payload length so the
+  CRC octets are never decoded as file data or as part of a TLV chain.
 
 ### Not Implemented
 
-- **CRC computation and checking** (§4.1) — the header's CRC flag is encoded
-  and the trailer's length is accounted for, but no CRC value is computed or
-  verified; supply and check it in the caller.
 - **Optional checksum types** 1–14 (§4.2.2.5) — reported as unsupported by
   `cfdp_checksum_type_supported()`, so the caller can apply the §4.2.2.8
   fallback.
@@ -64,11 +62,13 @@ EmbeddedCFDP/
 │   ├── cfdp_common.h       # Enums, constants, shared helpers
 │   ├── cfdp_endian.h       # Big-endian integer helpers
 │   ├── cfdp_checksum.h     # Modular and null file checksums
+│   ├── cfdp_crc.h          # 16-bit PDU CRC
 │   ├── cfdp_pdu.h          # Fixed PDU header + File Data PDU
 │   ├── cfdp_directive.h    # File Directive PDUs
 │   └── cfdp_tlv.h          # LV and TLV parameters
 ├── src/
 │   ├── cfdp_checksum.c
+│   ├── cfdp_crc.c
 │   ├── cfdp_pdu.c
 │   ├── cfdp_directive.c
 │   └── cfdp_tlv.c
@@ -78,6 +78,7 @@ EmbeddedCFDP/
 │   ├── cunit.h             # Minimal test framework
 │   ├── test_runners.h      # Per-module test runner declarations
 │   ├── test_cfdp_checksum.c
+│   ├── test_cfdp_crc.c
 │   ├── test_cfdp_pdu.c
 │   ├── test_cfdp_directive.c
 │   ├── test_cfdp_tlv.c
@@ -151,7 +152,7 @@ make clean
 
 ## Quick Start
 
-### Step 1 — Serialise a header and an EOF PDU
+### Step 1 — Serialise a header and an EOF PDU, with a CRC
 
 ```c
 #include "cfdp.h"
@@ -163,6 +164,7 @@ hdr.version = CFDP_PROTOCOL_VERSION;
 hdr.pdu_type = CFDP_PDU_TYPE_DIRECTIVE;
 hdr.direction = CFDP_DIRECTION_TOWARD_RECEIVER;
 hdr.transmission_mode = CFDP_TRANS_MODE_UNACKNOWLEDGED;
+hdr.crc_flag = CFDP_CRC_PRESENT;
 hdr.large_file_flag = CFDP_FILE_SIZE_SMALL;
 hdr.entity_id_length = 1;
 hdr.transaction_seq_length = 2;
@@ -177,14 +179,22 @@ eof.file_size = file_len;
 
 size_t hlen = cfdp_pdu_header_size(&hdr);
 size_t plen = cfdp_eof_serialize(&eof, hdr.large_file_flag, buf + hlen, sizeof(buf) - hlen);
-hdr.data_field_length = (uint16_t)plen;
+hdr.data_field_length = (uint16_t)(plen + CFDP_PDU_CRC_LEN); /* the CRC counts (§4.1.3.2) */
 cfdp_pdu_header_serialize(&hdr, buf, sizeof(buf));
-size_t total = hlen + plen; /* bytes to transmit */
+size_t total = cfdp_pdu_crc_append(buf, hlen + plen, sizeof(buf)); /* bytes to transmit */
 ```
+
+Leave `crc_flag` clear, size `data_field_length` for the payload alone and skip
+`cfdp_pdu_crc_append()` to send without a CRC.
 
 ### Step 2 — Parse a received PDU
 
 ```c
+if (!cfdp_pdu_crc_verify(rx, rx_len)) {
+    /* §4.1.2: discard. Passes any PDU whose CRC flag is clear. */
+    return;
+}
+
 cfdp_pdu_header_t hdr;
 size_t hlen = cfdp_pdu_header_deserialize(rx, rx_len, &hdr);
 
@@ -215,7 +225,16 @@ size_t cfdp_pdu_header_size(const cfdp_pdu_header_t *hdr);
 size_t cfdp_pdu_header_serialize(const cfdp_pdu_header_t *hdr, uint8_t *buf, size_t buf_len);
 size_t cfdp_pdu_header_deserialize(const uint8_t *buf, size_t buf_len, cfdp_pdu_header_t *hdr);
 size_t cfdp_pdu_payload_size(const cfdp_pdu_header_t *hdr);
+size_t cfdp_pdu_crc_append(uint8_t *buf, size_t pdu_len, size_t buf_len);
+bool cfdp_pdu_crc_verify(const uint8_t *buf, size_t buf_len);
 ```
+
+`cfdp_pdu_crc_append()` expects the header to have been serialised with the CRC
+flag set and `data_field_length` already counting the two CRC octets, and
+refuses otherwise — forgetting the `+ CFDP_PDU_CRC_LEN` is the mistake it
+exists to catch. `cfdp_pdu_crc_verify()` implements §4.1.2 as a single
+accept/discard decision and ignores octets beyond the PDU the header describes,
+so a padded link frame can be handed to it directly.
 
 ### File Data (`cfdp_pdu.h`)
 
@@ -303,6 +322,17 @@ not implement. §4.2.2.8 then calls for an Unsupported Checksum Type fault, with
 the sender falling back to the modular checksum and the receiver to the null
 checksum; that choice depends on the entity's role and is left to the caller.
 
+### CRC (`cfdp_crc.h`)
+
+```c
+uint16_t cfdp_crc_update(uint16_t crc, const uint8_t *data, size_t len);
+uint16_t cfdp_crc_compute(const uint8_t *data, size_t len);
+```
+
+The raw CCSDS TC CRC-16 (polynomial `0x1021`, preset `0xFFFF`, no final
+inversion; `"123456789"` → `0x29B1`), for callers that assemble PDUs in pieces.
+The PDU-level helpers above are the normal entry points.
+
 ### Return-value convention
 
 Every `_serialize` / `_deserialize` function returns the number of octets
@@ -320,9 +350,6 @@ malformed input).
 
 - Optional TLV parameters (fault location, filestore requests/responses,
   messages to user) are not encoded or decoded.
-- The 16-bit CRC value is not computed or checked. The flag is preserved and
-  `cfdp_pdu_payload_size()` excludes the trailer from the payload length, but
-  computing and verifying the CRC itself is left to the caller.
 - No transaction state machine, timers or retransmission logic.
 
 ## References
