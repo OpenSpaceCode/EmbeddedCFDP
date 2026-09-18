@@ -348,9 +348,17 @@ malformed input).
 
 ## Limitations
 
-- Optional TLV parameters (fault location, filestore requests/responses,
-  messages to user) are not encoded or decoded.
-- No transaction state machine, timers or retransmission logic.
+- No transaction state machine, timers, retransmission or filestore procedures
+  (§4.3–§4.12): the library encodes and decodes PDUs and leaves the protocol
+  behaviour to the caller.
+- The EOF and Finished decoders do not enforce the Fault Location rule their
+  encoders do: a fault condition without the TLV, or the TLV without a fault
+  condition, still decodes. Check `fault_location_len` if it matters.
+- Reserved and spare bits are not checked on decode; a PDU with them set
+  decodes as if they were clear.
+- Filestore Response status codes are not validated against the per-action
+  ranges of table 5-18; the action code itself is.
+- Checksum types 1–14 are not implemented (see Not Implemented above).
 
 ## References
 
