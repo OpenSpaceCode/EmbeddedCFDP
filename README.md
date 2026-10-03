@@ -8,10 +8,9 @@ reusable, standards-aligned components for small-scale space applications.
 
 - **CCSDS 727.0-B-5**: CCSDS File Delivery Protocol (CFDP) — Blue Book.
 
-This library implements the *basic* protocol layer: serialisation and
-deserialisation of the fundamental PDUs. The transaction state machine, timers,
-retransmission and filestore are out of scope. See
-[`docs/727x0b5e1.pdf`](docs/727x0b5e1.pdf) for the standard itself.
+This library implements the CFDP wire format — every PDU of §5, with the LV and TLV parameters of §5.4 — together with the two protocol procedures that operate directly on PDUs and files: the PDU CRC (§4.1) and the file checksums (§4.2).
+The transaction procedures (§4.3–§4.12), user operations (§6) and the filestore itself are out of scope, as are timers, retransmission and the transaction state machine.
+
 
 ## Features
 
@@ -83,8 +82,6 @@ EmbeddedCFDP/
 │   ├── test_cfdp_directive.c
 │   ├── test_cfdp_tlv.c
 │   └── unit_tests.c        # Test entry point
-├── docs/
-│   └── 727x0b5e1.pdf       # CCSDS 727.0-B-5 Blue Book
 ├── tools/
 │   └── coverage-html.sh    # Coverage report
 ├── build/                  # Build artifacts
