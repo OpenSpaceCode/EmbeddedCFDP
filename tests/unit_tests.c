@@ -1,21 +1,50 @@
-#include "cunit.h"
+/**
+ * @file    unit_tests.c
+ * @brief   Unit test entry point: runs each module's suite and reports the tally
+ *
+ * OpenSpaceCode — https://github.com/OpenSpaceCode
+ */
+
+#include "test_runners.h"
+
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
-static int test_case_0(void) {
+/** @brief Print one module's tally in the summary layout. */
+#define REPORT(label, r) printf("  %-18s Passed %d/%d\n\n", label ":", (r).passed, (r).total)
 
-  return 0;
-}
+int main(void)
+{
+    test_result_t r;
+    int total_passed = 0;
+    int total_tests = 0;
 
-int main(void) {
-  RUN_TEST(test_case_0);
+    r = test_cfdp_pdu_run_all();
+    REPORT("cfdp_pdu", r);
+    total_passed += r.passed;
+    total_tests += r.total;
 
-  if (cunit_overall_failures == 0) {
-    printf("ALL TESTS PASSED\n");
-    return 0;
-  } else {
-    printf("%d TEST(S) FAILED\n", cunit_overall_failures);
-    return 1;
-  }
+    r = test_cfdp_directive_run_all();
+    REPORT("cfdp_directive", r);
+    total_passed += r.passed;
+    total_tests += r.total;
+
+    r = test_cfdp_tlv_run_all();
+    REPORT("cfdp_tlv", r);
+    total_passed += r.passed;
+    total_tests += r.total;
+
+    r = test_cfdp_checksum_run_all();
+    REPORT("cfdp_checksum", r);
+    total_passed += r.passed;
+    total_tests += r.total;
+
+    r = test_cfdp_crc_run_all();
+    REPORT("cfdp_crc", r);
+    total_passed += r.passed;
+    total_tests += r.total;
+
+    printf("  ------------------------------\n");
+    printf("  %-18s Passed %d/%d\n", "All UT:", total_passed, total_tests);
+
+    return (total_passed == total_tests) ? 0 : 1;
 }
